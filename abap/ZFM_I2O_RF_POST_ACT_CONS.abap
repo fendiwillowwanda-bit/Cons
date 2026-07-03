@@ -161,7 +161,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   lv_actual_qty = cs_chg_data-consumed_qty.
 
   IF lv_actual_qty IS INITIAL OR lv_actual_qty <= 0.
-    MESSAGE e055(zmsg_i2o_rf) WITH 'ActQ' 'Blank' RAISING error.
+    MESSAGE e058(zmsg_i2o_rf) WITH 'ActQ' RAISING error.
   ENDIF.
 
   IF lv_reason IS INITIAL.
@@ -183,7 +183,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
   IF lv_plan_qty IS INITIAL OR lv_plan_qty <= 0.
-    MESSAGE e051(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -218,7 +218,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   READ TABLE lt_tol INTO ls_tol WITH KEY lgnum = lv_lgnum.
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_reason = lc_over.
@@ -235,7 +235,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   lv_diff_qty = lv_actual_qty - lv_plan_qty.
 
   IF lv_diff_qty = 0.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_reason = lc_over.
@@ -259,7 +259,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
   IF lv_tol_pct IS INITIAL OR lv_tol_pct <= 0.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   lv_tol_qty  = lv_plan_qty * lv_tol_pct / 100.
@@ -285,7 +285,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   lv_proc_type = lv_pval02.
 
   IF lv_proc_type IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR lv_pval02.
@@ -299,7 +299,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   lv_doc_type = lv_pval02.
 
   IF lv_doc_type IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR lv_pval02.
@@ -313,7 +313,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   lv_pi_area = lv_pval02.
 
   IF lv_pi_area IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   SELECT SINGLE pval02
@@ -325,7 +325,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
      AND kval02 = @lv_reason.
 
   IF sy-subrc <> 0 OR lv_pi_reason IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -344,7 +344,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
   IF lv_huident IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   lv_matnr = is_screen_data-matnr_ean.
@@ -374,7 +374,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       OTHERS      = 2.
 
   IF sy-subrc <> 0 OR lt_huitm IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -423,10 +423,10 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   IF <ls_huitm> IS NOT ASSIGNED.
     " No item on the HU matches the order's component/batch at all -
-    " covers the FDS error "Material identified is not included in
+    " this is the FDS error "Material identified is not included in
     " the BOM of the Process Order" for the case where the scanned HU
     " does not contain the expected component.
-    MESSAGE e057(zmsg_i2o_rf) WITH lv_matnr RAISING error.
+    MESSAGE e051(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR: lv_matid, lv_batchid.
@@ -442,7 +442,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
   IF lv_matid IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) WITH 'MATID missing from selected stock' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -450,7 +450,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * bound to this order's reservation
 *--------------------------------------------------------------------*
   IF lv_order_matid IS NOT INITIAL AND lv_order_matid <> lv_matid.
-    MESSAGE e057(zmsg_i2o_rf) WITH lv_matnr RAISING error.
+    MESSAGE e051(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   READ TABLE lt_huhdr ASSIGNING <ls_huhdr> INDEX 1.
@@ -473,7 +473,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
   IF lv_lgpla IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -495,7 +495,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
   IF lv_lgtyp IS INITIAL.
-    MESSAGE e053(zmsg_i2o_rf) WITH 'Storage type missing' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   DATA: ls_lagp TYPE /scwm/lagp.
@@ -517,7 +517,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   ASSIGN COMPONENT 'DATA' OF STRUCTURE ls_item_create TO <ls_data>.
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   MOVE-CORRESPONDING <ls_huitm> TO <ls_data>.
@@ -532,7 +532,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   ASSIGN COMPONENT 'STOCK_ITEM' OF STRUCTURE <ls_data> TO <ls_stock>.
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   MOVE-CORRESPONDING <ls_huitm> TO <ls_stock>.
@@ -608,12 +608,12 @@ FUNCTION zfm_i2o_rf_post_act_cons.
              ls_bapiret-message_v3 ls_bapiret-message_v4
         RAISING error.
     ENDIF.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   READ TABLE lt_pi_doc INTO ls_pi_doc INDEX 1.
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -655,7 +655,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   ASSIGN COMPONENT 'DATA' OF STRUCTURE <ls_cnt_res> TO <ls_res_data>.
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) WITH 'No count result data' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR <ls_res_data>.
@@ -685,7 +685,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   ASSIGN COMPONENT 'STOCK_ITEM' OF STRUCTURE <ls_res_data> TO <ls_res_stock>.
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) WITH 'No stock item' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR <ls_res_stock>.
@@ -715,7 +715,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   ASSIGN COMPONENT 'T_QUAN' OF STRUCTURE <ls_cnt_res> TO <lt_cnt_quan>.
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) WITH 'No quantity table' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR <lt_cnt_quan>.
@@ -723,7 +723,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   INSERT INITIAL LINE INTO TABLE <lt_cnt_quan> ASSIGNING <ls_cnt_quan>.
 
   IF sy-subrc <> 0.
-    MESSAGE e053(zmsg_i2o_rf) WITH 'Quantity append failed' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   set_comp 'QAN_STATUS'       <ls_cnt_quan> 'M'.
@@ -753,7 +753,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
              ls_bapiret-message_v3 ls_bapiret-message_v4
         RAISING error.
     ENDIF.
-    MESSAGE e053(zmsg_i2o_rf) WITH 'PI count failed' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   COMMIT WORK AND WAIT.
@@ -862,7 +862,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
                ls_bapiret-message_v3 ls_bapiret-message_v4
           RAISING error.
       ENDIF.
-      MESSAGE e061(zmsg_i2o_rf) WITH 'Counting follow-up document failed' RAISING error.
+      MESSAGE e057(zmsg_i2o_rf) RAISING error.
     ENDIF.
 
     COMMIT WORK AND WAIT.
@@ -901,7 +901,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
              ls_bapiret-message_v3 ls_bapiret-message_v4
         RAISING error.
     ENDIF.
-    MESSAGE e058(zmsg_i2o_rf) WITH 'PI post failed' RAISING error.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   COMMIT WORK AND WAIT.
@@ -932,7 +932,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
           eo_diff_analyzer = lo_diff_analyzer.
 
       IF lo_diff_analyzer IS NOT BOUND.
-        MESSAGE e060(zmsg_i2o_rf) WITH 'Diff Analyzer instance not available' RAISING error.
+        MESSAGE e057(zmsg_i2o_rf) RAISING error.
       ENDIF.
 
       CLEAR lt_matid_diff.
@@ -951,7 +951,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
           et_asp_oi_cum = lt_asp_oi_cum ).
 
       IF lt_asp_od_itm IS INITIAL.
-        MESSAGE e060(zmsg_i2o_rf) WITH 'No stock difference found for reconciliation' RAISING error.
+        MESSAGE e057(zmsg_i2o_rf) RAISING error.
       ENDIF.
 
       CLEAR lt_diff_post.
@@ -965,7 +965,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
           et_diff_post  = lt_diff_post ).
 
       IF lt_diff_post IS INITIAL.
-        MESSAGE e060(zmsg_i2o_rf) WITH 'Diff Analyzer produced no posting data' RAISING error.
+        MESSAGE e057(zmsg_i2o_rf) RAISING error.
       ENDIF.
 
       CLEAR: lt_diff_bapiret, lv_diff_rejected.
@@ -984,13 +984,13 @@ FUNCTION zfm_i2o_rf_post_act_cons.
                  ls_diff_bapiret-message_v3 ls_diff_bapiret-message_v4
             RAISING error.
         ENDIF.
-        MESSAGE e060(zmsg_i2o_rf) WITH 'Diff Analyzer posting rejected' RAISING error.
+        MESSAGE e057(zmsg_i2o_rf) RAISING error.
       ENDIF.
 
       COMMIT WORK AND WAIT.
 
-    CATCH cx_root INTO DATA(lx_diff_error).
-      MESSAGE e060(zmsg_i2o_rf) WITH lx_diff_error->get_text( ) RAISING error.
+    CATCH cx_root.
+      MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDTRY.
 
 *--------------------------------------------------------------------*

@@ -74,7 +74,7 @@ FUNCTION zfm_i2o_rf_micotr_miqusl_pai.
             TRY.
                 lv_acons_qty = lv_char_qty.
               CATCH cx_sy_conversion_no_number.
-                MESSAGE e055(zmsg_i2o_rf) WITH 'ActQ' 'Blank'.
+                MESSAGE e058(zmsg_i2o_rf) WITH 'ActQ'.
             ENDTRY.
 
           ENDIF.
@@ -101,7 +101,7 @@ FUNCTION zfm_i2o_rf_micotr_miqusl_pai.
 
           "ActQ is required when pressing ACon
           IF lv_acons_qty <= 0.
-            MESSAGE e055(zmsg_i2o_rf) WITH 'ActQ' 'Blank'.
+            MESSAGE e058(zmsg_i2o_rf) WITH 'ActQ'.
           ENDIF.
 
           "Pass converted quantity to CHG data for ZFM_I2O_RF_POST_ACT_CONS
@@ -128,7 +128,7 @@ FUNCTION zfm_i2o_rf_micotr_miqusl_pai.
               MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
                 WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
             ELSE.
-              MESSAGE e053(zmsg_i2o_rf).
+              MESSAGE e057(zmsg_i2o_rf).
             ENDIF.
           ENDIF.
 
