@@ -216,7 +216,10 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     IMPORTING
       et_result = lt_tol ).
 
-  READ TABLE lt_tol INTO ls_tol WITH KEY lgnum = lv_lgnum.
+  " zsi2o_brf_con_tolerance has no LGNUM component - get_con_tolerance
+  " already scopes the result to iv_lgnum, so the first (and expected
+  " only) row is the tolerance row for this warehouse.
+  READ TABLE lt_tol INTO ls_tol INDEX 1.
   IF sy-subrc <> 0.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
@@ -386,10 +389,11 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     lv_order_matid = <lv_src>.
   ENDIF.
 
-  IF lv_order_matid IS INITIAL AND cs_chg_data-mat_global-matid IS NOT INITIAL.
-    lv_order_matid = cs_chg_data-mat_global-matid.
-  ENDIF.
-
+  " batch-matid is used elsewhere in the existing code
+  " (ZFM_I2O_RF_MICOTR_MIQUSL_PAI's /SCWM/MATERIAL_QUAN_CONVERT call),
+  " so it is a known-safe static component - unlike mat_global-matid,
+  " which was never proven to exist and was dropped after LGNUM turned
+  " out to be a guess that didn't compile.
   IF lv_order_matid IS INITIAL AND cs_chg_data-batch-matid IS NOT INITIAL.
     lv_order_matid = cs_chg_data-batch-matid.
   ENDIF.
