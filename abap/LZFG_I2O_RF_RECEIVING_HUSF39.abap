@@ -21,6 +21,90 @@ FORM frm_derive_plant_from_entitled
 
 ENDFORM.
 
+FORM frm_determine_packspec_rehu
+  USING    iv_matid     TYPE /scwm/de_matid
+           iv_plant     TYPE c
+           iv_pak_locid TYPE /sapapo/locid
+           iv_qty       TYPE /scdl/dl_quantity
+           iv_uom       TYPE /scwm/de_unit
+  CHANGING cv_guid_ps   TYPE /scwm/de_guid_ps.
+
+* Resolves the PackSpec explicitly, the same way the proven-working
+* Process Order receiving flow does (frm_pmat_from_packspec_mrhu),
+* instead of only finding out whether /SCWM/HU_AUTOPACK_IBDLV managed
+* to determine one internally after the fact. PAK_PLANT and PAK_LOCID
+* are both offered as condition fields - whichever one the '0IBD'
+* condition table actually keys on will match; set_comp no-ops for the
+* field that doesn't exist/apply.
+
+  CONSTANTS lc_procedure TYPE /scwm/de_dlvap_ctlist VALUE '0IBD'.
+
+  DATA: ls_det_fields TYPE /scwm/pak_com_i,
+        ls_cond       TYPE /scwm/s_ps_cond,
+        ls_dlv_item   TYPE /scwm/dlv_docid_item_str,
+        lt_packspec   TYPE /scwm/tt_guid_ps,
+        lv_valid_on   TYPE timestamp.
+
+  FIELD-SYMBOLS <lv_any> TYPE any.
+
+  DEFINE set_comp.
+    ASSIGN COMPONENT &1 OF STRUCTURE &2 TO <lv_any>.
+    IF sy-subrc = 0 AND <lv_any> IS ASSIGNED.
+      <lv_any> = &3.
+      UNASSIGN <lv_any>.
+    ENDIF.
+  END-OF-DEFINITION.
+
+  CLEAR cv_guid_ps.
+
+  IF iv_matid IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  CLEAR ls_det_fields.
+  set_comp 'PAK_MATID'    ls_det_fields iv_matid.
+  set_comp 'PAK_REFMATID' ls_det_fields iv_matid.
+
+  IF iv_plant IS NOT INITIAL.
+    set_comp 'PAK_PLANT' ls_det_fields iv_plant.
+  ENDIF.
+
+  IF iv_pak_locid IS NOT INITIAL.
+    set_comp 'PAK_LOCID' ls_det_fields iv_pak_locid.
+  ENDIF.
+
+  CLEAR ls_cond.
+  ls_cond-quantity = iv_qty.
+  ls_cond-unit_q   = iv_uom.
+
+  CLEAR ls_dlv_item.
+
+  GET TIME STAMP FIELD lv_valid_on.
+
+  CALL FUNCTION '/SCWM/PS_FIND_AND_EVALUATE'
+    EXPORTING
+      is_fields       = ls_det_fields
+      iv_procedure    = lc_procedure
+      is_condition    = ls_cond
+      i_data          = ls_dlv_item
+      iv_valid_on     = lv_valid_on
+      iv_read_refmat  = abap_true
+    IMPORTING
+      et_packspec     = lt_packspec
+    EXCEPTIONS
+      determine_error = 1
+      read_error      = 2
+      no_record_found = 3
+      OTHERS          = 4.
+
+  IF sy-subrc <> 0 OR lt_packspec IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  READ TABLE lt_packspec INTO cv_guid_ps INDEX 1.
+
+ENDFORM.
+
 FORM frm_build_autopack_items_rehu
   USING    iv_lgnum   TYPE /scwm/lgnum
            iv_docid   TYPE /scwm/de_docid
@@ -31,7 +115,8 @@ FORM frm_build_autopack_items_rehu
            iv_qty     TYPE /scdl/dl_quantity
            iv_uom     TYPE /scwm/de_unit
            is_rehu    TYPE /scwm/s_rf_admin_rehu
-  CHANGING ct_items   TYPE /scwm/tt_ps_autopack.
+  CHANGING ct_items   TYPE /scwm/tt_ps_autopack
+           cv_guid_ps TYPE /scwm/de_guid_ps.
 
   DATA: ls_auto_item TYPE /scwm/s_ps_autopack,
         ls_rehu_item TYPE /scwm/dlv_item_out_prd_str,
@@ -56,6 +141,7 @@ FORM frm_build_autopack_items_rehu
   END-OF-DEFINITION.
 
   CLEAR: ct_items,
+         cv_guid_ps,
          ls_proci,
          ls_auto_item,
          ls_rehu_item,
@@ -169,6 +255,19 @@ FORM frm_build_autopack_items_rehu
   ENDIF.
 
 *--------------------------------------------------------------------*
+* Determine PackSpec explicitly (mirrors the proven-working Process
+* Order flow) instead of only finding out afterwards whether
+* /SCWM/HU_AUTOPACK_IBDLV managed to determine one internally.
+*--------------------------------------------------------------------*
+  PERFORM frm_determine_packspec_rehu
+    USING    lv_matid
+             lv_plant
+             lv_pak_locid
+             iv_qty
+             iv_uom
+    CHANGING cv_guid_ps.
+
+*--------------------------------------------------------------------*
 * STOCK
 *--------------------------------------------------------------------*
   MOVE-CORRESPONDING ls_rehu_item-stock   TO ls_auto_item-stock.
@@ -193,6 +292,10 @@ FORM frm_build_autopack_items_rehu
   set_comp 'QUAN'          ls_auto_item-stock iv_qty.
   set_comp 'UOM'           ls_auto_item-stock iv_uom.
   set_comp 'UNIT'          ls_auto_item-stock iv_uom.
+
+  IF cv_guid_ps IS NOT INITIAL.
+    set_comp 'GUID_PS' ls_auto_item-stock cv_guid_ps.
+  ENDIF.
 
 *--------------------------------------------------------------------*
 * COND
@@ -242,6 +345,10 @@ FORM frm_build_autopack_items_rehu
   set_comp 'UNIT_Q'       ls_auto_item-det iv_uom.
   set_comp 'UNIT'         ls_auto_item-det iv_uom.
   set_comp 'UOM'          ls_auto_item-det iv_uom.
+
+  IF cv_guid_ps IS NOT INITIAL.
+    set_comp 'GUID_PS' ls_auto_item-det cv_guid_ps.
+  ENDIF.
 
   APPEND ls_auto_item TO ct_items.
 

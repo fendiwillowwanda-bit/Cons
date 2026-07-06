@@ -27,6 +27,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
         lv_valid_on  TYPE timestamp,
         lv_severity  TYPE bapi_mtype,
         lv_hist_id   TYPE indx_srtfd,
+        lv_pmat      TYPE /scwm/de_rf_pmat,
+        lv_guid_ps   TYPE /scwm/de_guid_ps,
         lv_save_errtext TYPE c LENGTH 200.
 
   DATA: lt_docid  TYPE /scwm/tt_docid,
@@ -101,6 +103,9 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   get_comp_if_initial 'CHARG'       lv_batch cs_rehu_prod.
   get_comp_if_initial 'BATCH'       lv_batch cs_rehu_prod.
 
+  get_comp_if_initial 'PMAT' lv_pmat cs_rehu_hu.
+  get_comp_if_initial 'PMAT' lv_pmat cs_rehu_prod.
+
   IF lv_qty_char IS NOT INITIAL.
     lv_qty = lv_qty_char.
   ENDIF.
@@ -108,6 +113,10 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
 *--------------------------------------------------------------------*
 * Validations
 *--------------------------------------------------------------------*
+  IF lv_pmat IS NOT INITIAL.
+    MESSAGE e398(00) WITH 'Packaging material must be blank for Auto Pack' RAISING error.
+  ENDIF.
+
   IF lv_lgnum IS INITIAL.
     MESSAGE e398(00) WITH 'Warehouse number is required' RAISING error.
   ENDIF.
@@ -288,8 +297,10 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Build AutoPack item
+* Build AutoPack item and determine PackSpec explicitly
 *--------------------------------------------------------------------*
+  CLEAR lv_guid_ps.
+
   PERFORM frm_build_autopack_items_rehu
     USING    lv_lgnum
              lv_docid
@@ -300,10 +311,19 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
              lv_qty
              lv_uom
              cs_rehu
-    CHANGING lt_items.
+    CHANGING lt_items
+             lv_guid_ps.
 
   IF lt_items IS INITIAL.
     MESSAGE e398(00) WITH 'No delivery item found for Auto Pack' RAISING error.
+  ENDIF.
+
+  IF lv_guid_ps IS INITIAL.
+    MESSAGE e398(00)
+      WITH 'No packaging specification found for the '
+           'Material. Please maintain on /SCWM/PACKSPEC '
+           'and try again.'
+      RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
