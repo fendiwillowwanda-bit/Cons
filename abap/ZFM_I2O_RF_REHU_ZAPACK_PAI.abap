@@ -114,27 +114,27 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
 * Validations
 *--------------------------------------------------------------------*
   IF lv_pmat IS NOT INITIAL.
-    MESSAGE e398(00) WITH 'Packaging material must be blank for Auto Pack' RAISING error.
+    MESSAGE e031(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_lgnum IS INITIAL.
-    MESSAGE e398(00) WITH 'Warehouse number is required' RAISING error.
+    MESSAGE e022(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_docid IS INITIAL.
-    MESSAGE e398(00) WITH 'Inbound delivery is required for Auto Pack' RAISING error.
+    MESSAGE e040(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_prod IS INITIAL.
-    MESSAGE e398(00) WITH 'Product does not exist (/SCWM/MD002)' RAISING error.
+    MESSAGE e022(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_qty IS INITIAL.
-    MESSAGE e398(00) WITH 'Entered quantity is required for Auto Pack' RAISING error.
+    MESSAGE e023(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_uom IS INITIAL.
-    MESSAGE e398(00) WITH 'Unit of measure is required for Auto Pack' RAISING error.
+    MESSAGE e033(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -206,10 +206,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   ENDIF.
 
   IF sy-subrc <> 0 OR lv_itemid IS INITIAL.
-    MESSAGE e398(00)
-      WITH 'Selected delivery item/batch was not found '
-           'for Auto Pack.'
-      RAISING error.
+    MESSAGE e030(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   " The persisted delivery item's batch (lv_batch_db) can still be blank
@@ -244,10 +241,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
     " resolved, keep the original strict behavior rather than silently
     " letting a possibly batch-managed material through unchecked.
     IF lv_xchpf_found = abap_false OR lv_xchpf = abap_true.
-      MESSAGE e398(00)
-        WITH 'Batch is not saved on selected inbound '
-             'delivery item.'
-        RAISING error.
+      MESSAGE e059(zmsg_i2o_rf) RAISING error.
     ENDIF.
 
   ENDIF.
@@ -294,31 +288,25 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   IF lv_foreign IS NOT INITIAL.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00) WITH 'Inbound delivery is locked by another user' RAISING error.
+    MESSAGE e028(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_batch_init IS NOT INITIAL.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00) WITH 'Batch is still initial in packing item hierarchy' RAISING error.
+    MESSAGE e060(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_tw_items = abap_true.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00)
-      WITH 'Inbound delivery contains transportation '
-           'unit items'
-      RAISING error.
+    MESSAGE e061(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_asr_brfw = abap_true OR lv_asr_mixed = abap_true.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00)
-      WITH 'Inbound delivery status is not valid for '
-           'Auto Pack'
-      RAISING error.
+    MESSAGE e062(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -342,17 +330,13 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   IF lt_items IS INITIAL.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00) WITH 'No delivery item found for Auto Pack' RAISING error.
+    MESSAGE e030(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   IF lv_guid_ps IS INITIAL.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00)
-      WITH 'No packaging specification found for the '
-           'Material. Please maintain on /SCWM/PACKSPEC '
-           'and try again.'
-      RAISING error.
+    MESSAGE e026(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -393,11 +377,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   IF ls_return IS NOT INITIAL AND lt_huhdr IS INITIAL.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00)
-      WITH 'No packaging specification found for the '
-           'Material. Please maintain on /SCWM/PACKSPEC '
-           'and try again.'
-      RAISING error.
+    MESSAGE e026(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR ls_return.
@@ -414,10 +394,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
        OR ls_return-message CS 'minimum'.
       CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
       /scwm/cl_tm=>cleanup( ).
-      MESSAGE e398(00)
-        WITH 'Min. quantity of packaging specification '
-             'not met.'
-        RAISING error.
+      MESSAGE e027(zmsg_i2o_rf) RAISING error.
     ENDIF.
 
     IF ls_return-message CS 'batch'
@@ -426,15 +403,12 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
        OR ls_return-number = '395'.
       CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
       /scwm/cl_tm=>cleanup( ).
-      MESSAGE e398(00)
-        WITH 'Batch creation failed; auto-pack cannot '
-             'proceed.'
-        RAISING error.
+      MESSAGE e029(zmsg_i2o_rf) RAISING error.
     ENDIF.
 
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00)
+    MESSAGE e063(zmsg_i2o_rf)
       WITH ls_return-message(50)
            ls_return-message+50(50)
            ls_return-message+100(50)
@@ -446,7 +420,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   IF lt_huhdr IS INITIAL OR lt_huitm IS INITIAL.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
     /scwm/cl_tm=>cleanup( ).
-    MESSAGE e398(00) WITH 'AutoPack did not create HU item' RAISING error.
+    MESSAGE e064(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -462,7 +436,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
       lv_save_errtext = lx_save->get_text( ).
       CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
       /scwm/cl_tm=>cleanup( ).
-      MESSAGE e398(00)
+      MESSAGE e063(zmsg_i2o_rf)
         WITH lv_save_errtext(50)
              lv_save_errtext+50(50)
              lv_save_errtext+100(50)
@@ -502,7 +476,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
     TO DATABASE indx(zz)
     ID lv_hist_id.
 
-  MESSAGE s398(00) WITH 'AutoPack executed and saved successfully'.
+  MESSAGE s032(zmsg_i2o_rf).
   RETURN.
 
 ENDFUNCTION.
