@@ -58,7 +58,8 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lv_date_int         TYPE dats,
     lv_rejected         TYPE boole_d,
     lv_timezone         TYPE tznzone,
-    lv_tstamp_bbd       TYPE timestamp.
+    lv_tstamp_bbd       TYPE timestamp,
+    lv_item_time_dummy  TYPE syst-uzeit.
 
   DATA:
     ls_mara_shelf TYPE ty_mara_shelf,
@@ -489,6 +490,25 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
         ENDIF.
       ENDIF.
 
+    ENDIF.
+
+    " None of the above (dlv_md_access batch metadata, MCH1, MCHA) find
+    " anything when the batch was assigned straight onto the delivery
+    " item (e.g. via the item_sapext_prdi aspect - what
+    " frm_ensure_batch_rehu writes) without a corresponding classic
+    " batch master record. Fall back to what's already on the item
+    " itself (ls_item-sapext-tstfrbb/tzonebb for BBD,
+    " -tstfrpd/tzonepd for production date) before giving up.
+    IF lv_bbdat IS INITIAL AND ls_item-sapext-tstfrbb IS NOT INITIAL.
+      CONVERT TIME STAMP ls_item-sapext-tstfrbb
+            TIME ZONE ls_item-sapext-tzonebb
+            INTO DATE lv_bbdat TIME lv_item_time_dummy.
+    ENDIF.
+
+    IF lv_pddat IS INITIAL AND ls_item-sapext-tstfrpd IS NOT INITIAL.
+      CONVERT TIME STAMP ls_item-sapext-tstfrpd
+            TIME ZONE ls_item-sapext-tzonepd
+            INTO DATE lv_pddat TIME lv_item_time_dummy.
     ENDIF.
 
     gv_bbdat        = lv_bbdat.
