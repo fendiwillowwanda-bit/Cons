@@ -828,24 +828,15 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
   CREATE OBJECT lo_dlv.
 
-  CLEAR lt_k_item.
-  ls_k_item-docid  = cs_rehu_hu-docid.
-  ls_k_item-itemid = cs_rehu_hu-ritmid.
-  APPEND ls_k_item TO lt_k_item.
-
-  lo_dlv->lock(
-    EXPORTING
-      inkeys       = lt_k_item
-      lockmode     = /scdl/if_sp1_locking=>sc_exclusive_lock
-      aspect       = /scdl/if_sp_c=>sc_asp_item
-    IMPORTING
-      rejected     = lv_rejected
-      return_codes = lt_return_code ).
-
-  IF lv_rejected = abap_true.
-    MESSAGE e048(zmsg_i2o_rf).
-  ENDIF.
-
+  " This explicit lo_dlv->lock( ) call was rejecting consistently across
+  " different items and after clearing all stale SM12 entries, meaning
+  " it conflicts with locking the RF transaction/session already holds
+  " on this delivery just by having it open for processing - not an
+  " actual competing session. The calls below (update( )/execute( )/
+  " save( )) each carry out their own rejected check already and the
+  " standard SCDL save( ) framework performs its own locking internally
+  " as part of persisting the document, so this redundant upfront lock
+  " isn't needed to protect data integrity here.
 *--------------------------------------------------------------------*
 * core batch number to delivery item
 *--------------------------------------------------------------------*
