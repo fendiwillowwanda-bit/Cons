@@ -191,7 +191,15 @@ FORM frm_build_autopack_items_rehu
   set_comp 'DOCCAT'       ls_auto_item-det iv_doccat.
   set_comp 'LGNUM'        ls_auto_item-det iv_lgnum.
 
-  "IMPORTANT: PackSpec uses SC Unit LOCID, not LOCNO
+  " PAK_PLANT is what the proven-working Process Order receiving flow
+  " (frm_pmat_from_packspec_mrhu / frm_build_autopack_items_mrhu) keys
+  " its PackSpec determination on - it never converts through
+  " /SAPAPO/LOC for PAK_LOCID. Set both: PAK_PLANT as the primary key,
+  " PAK_LOCID as a best-effort extra in case this procedure's condition
+  " table also uses it (harmless if the field/lookup doesn't apply -
+  " set_comp no-ops when the target component doesn't exist, and a
+  " blank lv_pak_locid just leaves that field unset).
+  set_comp 'PAK_PLANT'    ls_auto_item-det lv_plant.
   set_comp 'PAK_LOCID'    ls_auto_item-det lv_pak_locid.
 
   set_comp 'PAK_MATID'    ls_auto_item-det lv_matid.
