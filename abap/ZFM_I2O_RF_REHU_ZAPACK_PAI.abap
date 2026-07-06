@@ -26,7 +26,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
         lv_procedure TYPE /scwm/de_dlvap_ctlist,
         lv_valid_on  TYPE timestamp,
         lv_severity  TYPE bapi_mtype,
-        lv_hist_id   TYPE indx_srtfd.
+        lv_hist_id   TYPE indx_srtfd,
+        lv_save_errtext TYPE c LENGTH 200.
 
   DATA: lt_docid  TYPE /scwm/tt_docid,
         lt_items  TYPE /scwm/tt_ps_autopack,
@@ -387,7 +388,11 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   TRY.
       lo_pack->save( ).
     CATCH cx_root INTO DATA(lx_save).
-      DATA(lv_save_errtext) = lx_save->get_text( ).
+      " lx_save->get_text( ) returns a dynamic-length STRING; slicing it
+      " directly with fixed offsets dumps (CX_SY_RANGE_OUT_OF_BOUNDS) once
+      " the text is shorter than the requested offset, which is the common
+      " case. Copy into a fixed-length (space-padded) buffer first.
+      lv_save_errtext = lx_save->get_text( ).
       MESSAGE e398(00)
         WITH lv_save_errtext(50)
              lv_save_errtext+50(50)
