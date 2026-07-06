@@ -284,15 +284,28 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
       ev_asr_brfw      = lv_asr_brfw
       ev_asr_mixed     = lv_asr_mixed ).
 
+  " From here on, lo_pack->init( iv_lock_dlv = abap_true ) has already
+  " locked the delivery. Every RAISING error below must release that
+  " lock first (same CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK' +
+  " /scwm/cl_tm=>cleanup( ) pattern the Process Order flow already
+  " uses on all its error paths) - otherwise the lock is left stale
+  " across RF transaction steps, causing later attempts (e.g. F3
+  " Batch's own lo_dlv->lock() call) to fail with "item lock rejected".
   IF lv_foreign IS NOT INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00) WITH 'Inbound delivery is locked by another user' RAISING error.
   ENDIF.
 
   IF lv_batch_init IS NOT INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00) WITH 'Batch is still initial in packing item hierarchy' RAISING error.
   ENDIF.
 
   IF lv_tw_items = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00)
       WITH 'Inbound delivery contains transportation '
            'unit items'
@@ -300,6 +313,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   ENDIF.
 
   IF lv_asr_brfw = abap_true OR lv_asr_mixed = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00)
       WITH 'Inbound delivery status is not valid for '
            'Auto Pack'
@@ -325,10 +340,14 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
              lv_guid_ps.
 
   IF lt_items IS INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00) WITH 'No delivery item found for Auto Pack' RAISING error.
   ENDIF.
 
   IF lv_guid_ps IS INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00)
       WITH 'No packaging specification found for the '
            'Material. Please maintain on /SCWM/PACKSPEC '
@@ -372,6 +391,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   ENDLOOP.
 
   IF ls_return IS NOT INITIAL AND lt_huhdr IS INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00)
       WITH 'No packaging specification found for the '
            'Material. Please maintain on /SCWM/PACKSPEC '
@@ -391,6 +412,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
     IF ls_return-message CS 'Min'
        OR ls_return-message CS 'min'
        OR ls_return-message CS 'minimum'.
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+      /scwm/cl_tm=>cleanup( ).
       MESSAGE e398(00)
         WITH 'Min. quantity of packaging specification '
              'not met.'
@@ -401,12 +424,16 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
        OR ls_return-message CS 'Batch'
        OR ls_return-id = '/SCWM/RF_EN'
        OR ls_return-number = '395'.
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+      /scwm/cl_tm=>cleanup( ).
       MESSAGE e398(00)
         WITH 'Batch creation failed; auto-pack cannot '
              'proceed.'
         RAISING error.
     ENDIF.
 
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00)
       WITH ls_return-message(50)
            ls_return-message+50(50)
@@ -417,6 +444,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   ENDIF.
 
   IF lt_huhdr IS INITIAL OR lt_huitm IS INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    /scwm/cl_tm=>cleanup( ).
     MESSAGE e398(00) WITH 'AutoPack did not create HU item' RAISING error.
   ENDIF.
 
@@ -431,6 +460,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
       " the text is shorter than the requested offset, which is the common
       " case. Copy into a fixed-length (space-padded) buffer first.
       lv_save_errtext = lx_save->get_text( ).
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+      /scwm/cl_tm=>cleanup( ).
       MESSAGE e398(00)
         WITH lv_save_errtext(50)
              lv_save_errtext+50(50)
