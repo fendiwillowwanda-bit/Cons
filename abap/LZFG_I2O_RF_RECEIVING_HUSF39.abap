@@ -513,7 +513,9 @@ FORM frm_build_autopack_items_rehu
         lv_itemid    TYPE /scdl/dl_itemid,
         lv_plant     TYPE c LENGTH 4,
         lv_scu       TYPE /sapapo/locno,
-        lv_pak_locid TYPE /sapapo/locid.
+        lv_pak_locid TYPE /sapapo/locid,
+        lv_cat       TYPE /lime/stock_category,
+        lv_vfdat     TYPE /scwm/sled.
 
   FIELD-SYMBOLS <lv_any> TYPE any.
 
@@ -525,12 +527,23 @@ FORM frm_build_autopack_items_rehu
     ENDIF.
   END-OF-DEFINITION.
 
+  DEFINE get_comp.
+    CLEAR &2.
+    ASSIGN COMPONENT &1 OF STRUCTURE &3 TO <lv_any>.
+    IF sy-subrc = 0 AND <lv_any> IS ASSIGNED.
+      &2 = <lv_any>.
+      UNASSIGN <lv_any>.
+    ENDIF.
+  END-OF-DEFINITION.
+
   CLEAR: ct_items,
          cv_guid_ps,
          ls_proci,
          ls_auto_item,
          ls_rehu_item,
          lv_batchid,
+         lv_cat,
+         lv_vfdat,
          lv_pak_locid.
 
 *--------------------------------------------------------------------*
@@ -653,6 +666,97 @@ FORM frm_build_autopack_items_rehu
     CHANGING cv_guid_ps.
 
 *--------------------------------------------------------------------*
+* Stock category (mirrors the proven-working Process Order flow,
+* frm_build_autopack_items_mrhu)
+*--------------------------------------------------------------------*
+  get_comp 'CAT' lv_cat ls_proci.
+
+  IF lv_cat IS INITIAL.
+    get_comp 'STOCK_CAT' lv_cat ls_proci.
+  ENDIF.
+
+  IF lv_cat IS INITIAL.
+    get_comp 'STOCK_CATEGORY' lv_cat ls_proci.
+  ENDIF.
+
+  IF lv_cat IS INITIAL.
+    get_comp 'STOCK_TYPE' lv_cat ls_proci.
+  ENDIF.
+
+  IF lv_cat = 'P'.
+    lv_cat = 'P2'.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* VFDAT / SLED
+*--------------------------------------------------------------------*
+  get_comp 'VFDAT' lv_vfdat ls_proci.
+
+  IF lv_vfdat IS INITIAL.
+    get_comp 'SLED' lv_vfdat ls_proci.
+  ENDIF.
+
+  IF lv_vfdat IS INITIAL.
+    get_comp 'EXPIRY_DATE' lv_vfdat ls_proci.
+  ENDIF.
+
+  IF lv_vfdat IS INITIAL
+  AND lv_prod_int IS NOT INITIAL
+  AND iv_batch    IS NOT INITIAL
+  AND lv_plant    IS NOT INITIAL.
+    SELECT SINGLE vfdat
+      FROM mcha
+      WHERE matnr = @lv_prod_int
+        AND werks = @lv_plant
+        AND charg = @iv_batch
+      INTO @lv_vfdat.
+  ENDIF.
+
+  IF lv_vfdat IS INITIAL
+  AND lv_prod_int IS NOT INITIAL
+  AND iv_batch    IS NOT INITIAL.
+    SELECT SINGLE vfdat
+      FROM mch1
+      WHERE matnr = @lv_prod_int
+        AND charg = @iv_batch
+      INTO @lv_vfdat.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* BATCHID - was never resolved before (declared but left blank),
+* causing /SCWM/HU_AUTOPACK_IBDLV to reject with "Could not find the
+* item to pack" since the stock/item structure carried no batch
+* reference for a batch-managed material. Resolve it the same way the
+* proven-working Process Order flow does.
+*--------------------------------------------------------------------*
+  get_comp 'BATCHID' lv_batchid ls_proci.
+
+  IF lv_batchid IS INITIAL.
+    get_comp 'BATCH_GUID' lv_batchid ls_proci.
+  ENDIF.
+
+  IF lv_batchid IS INITIAL.
+    get_comp 'GUID_BATCH' lv_batchid ls_proci.
+  ENDIF.
+
+  IF lv_batchid IS INITIAL
+  AND iv_lgnum    IS NOT INITIAL
+  AND lv_matid    IS NOT INITIAL
+  AND lv_entitled IS NOT INITIAL
+  AND lv_cat      IS NOT INITIAL
+  AND lv_vfdat    IS NOT INITIAL.
+
+    SELECT SINGLE batchid ##WARN_OK
+      FROM /scwm/aqua
+      WHERE lgnum    = @iv_lgnum
+        AND matid    = @lv_matid
+        AND entitled = @lv_entitled
+        AND cat      = @lv_cat
+        AND vfdat    = @lv_vfdat
+      INTO @lv_batchid.
+  ENDIF.
+
+*--------------------------------------------------------------------*
 * STOCK
 *--------------------------------------------------------------------*
   MOVE-CORRESPONDING ls_rehu_item-stock   TO ls_auto_item-stock.
@@ -671,6 +775,11 @@ FORM frm_build_autopack_items_rehu
   set_comp 'PRODUCTNO_EXT' ls_auto_item-stock lv_prod_int.
   set_comp 'BATCHNO'       ls_auto_item-stock iv_batch.
   set_comp 'BATCHID'       ls_auto_item-stock lv_batchid.
+
+  IF lv_cat IS NOT INITIAL.
+    set_comp 'CAT' ls_auto_item-stock lv_cat.
+  ENDIF.
+
   set_comp 'ENTITLED'      ls_auto_item-stock lv_entitled.
   set_comp 'ENTITLED_ROLE' ls_auto_item-stock 'BP'.
   set_comp 'QTY'           ls_auto_item-stock iv_qty.
@@ -722,6 +831,11 @@ FORM frm_build_autopack_items_rehu
 
   set_comp 'BATCHNO'      ls_auto_item-det iv_batch.
   set_comp 'BATCHID'      ls_auto_item-det lv_batchid.
+
+  IF lv_cat IS NOT INITIAL.
+    set_comp 'CAT' ls_auto_item-det lv_cat.
+  ENDIF.
+
   set_comp 'ENTITLED'     ls_auto_item-det lv_entitled.
   set_comp 'ENTITLED_ROLE' ls_auto_item-det 'BP'.
 
