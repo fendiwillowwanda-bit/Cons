@@ -4,7 +4,10 @@
 
 FORM frm_derive_plant_from_entitled
   USING    iv_entitled TYPE /scwm/de_entitled
-  CHANGING cv_plant    TYPE c LENGTH 4.
+  CHANGING cv_plant    TYPE c.
+* NOTE: generic C type, no LENGTH here - FORM interfaces don't allow a
+* LENGTH addition on generic types (only DATA/TYPES/CONSTANTS do); the
+* actual length (4) comes from the caller's TYPE c LENGTH 4 variable.
 
   CLEAR cv_plant.
 
