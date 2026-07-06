@@ -322,11 +322,18 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
     MESSAGE e028(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
-  IF lv_batch_init IS NOT INITIAL.
-    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
-    /scwm/cl_tm=>cleanup( ).
-    MESSAGE e060(zmsg_i2o_rf) RAISING error.
-  ENDIF.
+  " ev_batch_initial is scoped to the WHOLE delivery document (per
+  " /SCWM/CL_DLV_PACK_IBDL->INIT source: it evaluates every item via
+  " gt_itmp/map_hu_dlv, not just the one being packed), so it still
+  " fires 'X' even when lv_batch_db already holds a valid batch for
+  " THIS item - confirmed via debugger (LV_BATCH_DB = L00002A while
+  " LV_BATCH_INIT = 'X'; forcing past it completed AutoPack correctly).
+  " The FDS requirement ("error if material is batch managed and no
+  " batch created") is about the item being packed, which is already
+  " guaranteed above via frm_ensure_batch_rehu + e029/e059 before we
+  " ever reach lo_pack->init( ) - so gating on this document-wide flag
+  " only produces false positives from unrelated sibling items on the
+  " same delivery that haven't been batched/packed yet.
 
   IF lv_tw_items = abap_true.
     CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
