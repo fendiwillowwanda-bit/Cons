@@ -140,13 +140,15 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
 *--------------------------------------------------------------------*
 * Get exact delivery item/batch for selected RF item
 *--------------------------------------------------------------------*
-  DATA: lv_batch_db    TYPE /scdl/dl_batchno,
-        lv_prod_db     TYPE /scdl/dl_productno,
-        lv_prod_int    TYPE /scdl/dl_productno,
-        lv_entitled_db TYPE /scwm/de_entitled,
-        lv_plant       TYPE c LENGTH 4,
-        lv_xchpf       TYPE marc-xchpf,
-        lv_xchpf_found TYPE abap_bool.
+  DATA: lv_batch_db      TYPE /scdl/dl_batchno,
+        lv_prod_db       TYPE /scdl/dl_productno,
+        lv_prod_int      TYPE /scdl/dl_productno,
+        lv_entitled_db   TYPE /scwm/de_entitled,
+        lv_plant         TYPE c LENGTH 4,
+        lv_xchpf         TYPE marc-xchpf,
+        lv_xchpf_found   TYPE abap_bool,
+        lv_matnr_for_batch TYPE matnr,
+        lv_batch_rejected  TYPE abap_bool.
 
   lv_dlvno = gv_dlvno.
 
@@ -236,12 +238,41 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
       lv_xchpf_found = boolc( sy-subrc = 0 ).
     ENDIF.
 
-    " Only skip the error when MARC positively confirms the material is
-    " NOT batch-managed (XCHPF space). If the plant/MARC lookup can't be
-    " resolved, keep the original strict behavior rather than silently
-    " letting a possibly batch-managed material through unchecked.
-    IF lv_xchpf_found = abap_false OR lv_xchpf = abap_true.
+    " If the plant/MARC lookup can't be resolved, keep the original
+    " strict behavior rather than silently letting a possibly
+    " batch-managed material through unchecked.
+    IF lv_xchpf_found = abap_false.
       MESSAGE e059(zmsg_i2o_rf) RAISING error.
+    ENDIF.
+
+    IF lv_xchpf = abap_true.
+      " Batch-managed and no batch persisted yet: create/assign it
+      " ourselves as Auto Pack's first priority action (FDS: "Batch
+      " creation is done on first priority upon auto pack"), instead
+      " of requiring F3 Batch to have already been pressed and saved.
+      lv_matnr_for_batch = lv_prod_db.
+
+      CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
+        EXPORTING
+          input  = lv_matnr_for_batch
+        IMPORTING
+          output = lv_matnr_for_batch.
+
+      CLEAR lv_batch_rejected.
+
+      PERFORM frm_ensure_batch_rehu
+        USING    lv_lgnum
+                 lv_docid
+                 lv_itemid
+                 lv_matnr_for_batch
+                 lv_plant
+        CHANGING lv_batch_db
+                 lv_batch_rejected.
+
+      IF lv_batch_rejected = abap_true OR lv_batch_db IS INITIAL.
+        MESSAGE e029(zmsg_i2o_rf) RAISING error.
+      ENDIF.
+
     ENDIF.
 
   ENDIF.

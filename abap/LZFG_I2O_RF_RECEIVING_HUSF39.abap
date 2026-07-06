@@ -21,6 +21,381 @@ FORM frm_derive_plant_from_entitled
 
 ENDFORM.
 
+FORM frm_ensure_batch_rehu
+  USING    iv_lgnum     TYPE /scwm/lgnum
+           iv_docid     TYPE /scwm/de_docid
+           iv_itemid    TYPE /scdl/dl_itemid
+           iv_matnr_int TYPE matnr
+           iv_werks     TYPE werks_d
+  CHANGING cv_batchno   TYPE /scdl/dl_batchno
+           cv_rejected  TYPE abap_bool.
+
+* Creates the batch (if cv_batchno doesn't already exist as one) and
+* writes/saves it directly onto the inbound delivery item - the same
+* "Full qty only: assign batch/BBD directly to original item" mechanics
+* ZFM_I2O_RF_REHU_CRT_BATCH_PAI already uses for F3 Batch, extracted
+* here so Auto Pack can perform batch creation itself as its first
+* step (FDS: "Batch creation is done on first priority upon auto
+* pack"), instead of requiring F3 Batch to have already been pressed.
+* BBD/ProdDate/Vendor Batch are read from the same gv_bbdat/gv_pddat/
+* gv_vendor_batch globals F3 Batch populates - if those are still
+* blank (user never entered BBD/ProdDate on the product screen), batch
+* creation can't proceed here either, same as it can't in F3 Batch.
+
+  TYPES: BEGIN OF ty_mara_shelf,
+           xchpf TYPE mara-xchpf,
+           mhdhb TYPE mara-mhdhb,
+           iprkz TYPE mara-iprkz,
+         END OF ty_mara_shelf.
+
+  DATA: ls_mara_shelf       TYPE ty_mara_shelf,
+        ls_mcha             TYPE mcha,
+        lv_batch_exists     TYPE abap_bool,
+        lv_generated_batch  TYPE /scmb/mdl_batch_id,
+        lv_batchno_ui       TYPE /scmb/mdl_batch_id,
+        lv_check_external   TYPE c LENGTH 1,
+        lv_subrc_vb         TYPE sy-subrc,
+        lv_mch_bbdat        TYPE dats,
+        lv_mch_pddat        TYPE dats,
+        lv_mch_vendor_batch TYPE /scwm/de_vendor_batchno.
+
+  DATA: lt_return    TYPE STANDARD TABLE OF bapiret2,
+        lt_new_batch TYPE STANDARD TABLE OF mcha.
+
+  DATA: lo_dlv             TYPE REF TO /scdl/cl_sp_prd_inb,
+        lt_k_item          TYPE /scdl/t_sp_k_item,
+        ls_k_item          TYPE /scdl/s_sp_k_item,
+        lt_return_code     TYPE /scdl/t_sp_return_code,
+        lt_inrecords_prod  TYPE /scdl/t_sp_a_item_product,
+        ls_inrecords_prod  TYPE /scdl/s_sp_a_item_product,
+        lt_outrecords_prod TYPE /scdl/t_sp_a_item_product,
+        lt_inrecords_bbd   TYPE /scdl/t_sp_a_item_sapext_prdi,
+        ls_inrecords_bbd   TYPE /scdl/s_sp_a_item_sapext_prdi,
+        lt_outrecords_bbd  TYPE /scdl/t_sp_a_item_sapext_prdi,
+        lt_item_key        TYPE /scdl/t_sp_k_item,
+        ls_item_key        TYPE /scdl/s_sp_k_item,
+        ls_action          TYPE /scdl/s_sp_act_action,
+        lt_outrecords      TYPE /scdl/t_sp_a_item,
+        lv_rejected        TYPE boole_d,
+        lv_timezone        TYPE tznzone,
+        lv_tstamp_bbd      TYPE timestamp.
+
+  CLEAR cv_rejected.
+
+  lv_batchno_ui = cv_batchno.
+
+*--------------------------------------------------------------------*
+* Batch managed / shelf life
+*--------------------------------------------------------------------*
+  SELECT SINGLE xchpf, mhdhb, iprkz ##WARN_OK
+    FROM mara
+    INTO (@ls_mara_shelf-xchpf, @ls_mara_shelf-mhdhb, @ls_mara_shelf-iprkz)
+    WHERE matnr = @iv_matnr_int.
+
+*--------------------------------------------------------------------*
+* Check existing batch and retrieve BBD / ProdDate / Vendor Batch
+*--------------------------------------------------------------------*
+  CLEAR: lv_batch_exists, lv_mch_bbdat, lv_mch_pddat, lv_mch_vendor_batch.
+
+  IF lv_batchno_ui IS NOT INITIAL.
+
+    SELECT SINGLE vfdat, hsdat, licha
+      FROM mch1
+      INTO (@lv_mch_bbdat, @lv_mch_pddat, @lv_mch_vendor_batch)
+      WHERE matnr = @iv_matnr_int
+        AND charg = @lv_batchno_ui.
+
+    IF sy-subrc = 0.
+      lv_batch_exists = abap_true.
+    ELSE.
+      SELECT SINGLE vfdat, hsdat, licha
+        FROM mcha
+        INTO (@lv_mch_bbdat, @lv_mch_pddat, @lv_mch_vendor_batch)
+        WHERE matnr = @iv_matnr_int
+          AND werks = @iv_werks
+          AND charg = @lv_batchno_ui.
+
+      IF sy-subrc = 0.
+        lv_batch_exists = abap_true.
+      ENDIF.
+    ENDIF.
+
+    IF lv_batch_exists = abap_true.
+      IF gv_bbdat IS INITIAL.
+        gv_bbdat = lv_mch_bbdat.
+      ENDIF.
+      IF gv_pddat IS INITIAL.
+        gv_pddat = lv_mch_pddat.
+      ENDIF.
+      IF gv_vendor_batch IS INITIAL.
+        gv_vendor_batch = lv_mch_vendor_batch.
+      ENDIF.
+    ENDIF.
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Require / derive BBD
+*--------------------------------------------------------------------*
+  IF gv_bbdat IS INITIAL AND gv_pddat IS INITIAL.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  IF gv_pddat IS NOT INITIAL AND gv_bbdat IS INITIAL.
+
+    IF ls_mara_shelf-mhdhb IS INITIAL.
+      cv_rejected = abap_true.
+      RETURN.
+    ENDIF.
+
+    CASE ls_mara_shelf-iprkz.
+      WHEN 'D' OR space.
+        gv_bbdat = gv_pddat + ls_mara_shelf-mhdhb.
+      WHEN 'W'.
+        gv_bbdat = gv_pddat + ( ls_mara_shelf-mhdhb * 7 ).
+      WHEN 'M'.
+        CALL FUNCTION 'RP_CALC_DATE_IN_INTERVAL'
+          EXPORTING
+            date      = gv_pddat
+            days      = 0
+            months    = ls_mara_shelf-mhdhb
+            years     = 0
+            signum    = '+'
+          IMPORTING
+            calc_date = gv_bbdat.
+      WHEN 'Y'.
+        CALL FUNCTION 'RP_CALC_DATE_IN_INTERVAL'
+          EXPORTING
+            date      = gv_pddat
+            days      = 0
+            months    = 0
+            years     = ls_mara_shelf-mhdhb
+            signum    = '+'
+          IMPORTING
+            calc_date = gv_bbdat.
+      WHEN OTHERS.
+        cv_rejected = abap_true.
+        RETURN.
+    ENDCASE.
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Create batch master only if not existing
+*--------------------------------------------------------------------*
+  IF lv_batch_exists = abap_false.
+
+    IF lv_batchno_ui IS INITIAL.
+
+      CLEAR lv_generated_batch.
+
+      CALL FUNCTION 'ZFM_I2O_GET_ALNUM7_SEQ'
+        EXPORTING
+          iv_seqname    = 'EWM_BATCH'
+          iv_start      = 'L000000'
+          iv_reason     = 'NBAT'
+          iv_matnr      = iv_matnr_int
+          iv_werks      = iv_werks
+        IMPORTING
+          ev_number     = lv_generated_batch
+        EXCEPTIONS
+          lock_failed   = 1
+          overflow      = 2
+          invalid_input = 3
+          OTHERS        = 4.
+
+      IF sy-subrc <> 0 OR lv_generated_batch IS INITIAL.
+        cv_rejected = abap_true.
+        RETURN.
+      ENDIF.
+
+      lv_batchno_ui = lv_generated_batch.
+
+    ENDIF.
+
+    lv_check_external = abap_true.
+
+    CLEAR ls_mcha.
+    ls_mcha-matnr = iv_matnr_int.
+    ls_mcha-werks = iv_werks.
+    ls_mcha-charg = lv_batchno_ui.
+    ls_mcha-licha = gv_vendor_batch.
+    ls_mcha-hsdat = gv_pddat.
+    ls_mcha-vfdat = gv_bbdat.
+
+    CALL FUNCTION 'VB_CREATE_BATCH'
+      EXPORTING
+        ymcha               = ls_mcha
+        no_change_document  = space
+        check_external      = lv_check_external
+        check_customer      = 'X'
+      IMPORTING
+        ymcha               = ls_mcha
+      TABLES
+        new_batch           = lt_new_batch
+        return              = lt_return
+      EXCEPTIONS
+        batch_exist         = 12
+        OTHERS              = 34.
+
+    lv_subrc_vb = sy-subrc.
+
+    " subrc 12 (batch already exists) is fine here - it means a
+    " concurrent process created it between our existence check and
+    " this call; carry on and use it. Any other non-zero subrc is a
+    " genuine failure.
+    IF lv_subrc_vb <> 0 AND lv_subrc_vb <> 12.
+      cv_rejected = abap_true.
+      RETURN.
+    ENDIF.
+
+    COMMIT WORK AND WAIT.
+    lv_batchno_ui = ls_mcha-charg.
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Assign batch/BBD directly to the delivery item
+*--------------------------------------------------------------------*
+  /scwm/cl_tm=>set_lgnum( iv_lgnum ).
+
+  CREATE OBJECT lo_dlv.
+
+  CLEAR lt_k_item.
+  ls_k_item-docid  = iv_docid.
+  ls_k_item-itemid = iv_itemid.
+  APPEND ls_k_item TO lt_k_item.
+
+  lo_dlv->lock(
+    EXPORTING
+      inkeys       = lt_k_item
+      lockmode     = /scdl/if_sp1_locking=>sc_exclusive_lock
+      aspect       = /scdl/if_sp_c=>sc_asp_item
+    IMPORTING
+      rejected     = lv_rejected
+      return_codes = lt_return_code ).
+
+  IF lv_rejected = abap_true.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  CLEAR: ls_inrecords_prod, lt_inrecords_prod, lt_outrecords_prod.
+
+  ls_inrecords_prod-docid   = iv_docid.
+  ls_inrecords_prod-itemid  = iv_itemid.
+  ls_inrecords_prod-batchno = lv_batchno_ui.
+
+  APPEND ls_inrecords_prod TO lt_inrecords_prod.
+
+  lo_dlv->/scdl/if_sp1_aspect~update(
+    EXPORTING
+      aspect       = /scdl/if_sp_c=>sc_asp_item_product
+      inrecords    = lt_inrecords_prod
+    IMPORTING
+      outrecords   = lt_outrecords_prod
+      rejected     = lv_rejected
+      return_codes = lt_return_code ).
+
+  IF lv_rejected = abap_true.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  IF gv_bbdat IS NOT INITIAL.
+
+    CALL FUNCTION '/SCWM/LGNUM_TZONE_READ'
+      EXPORTING
+        iv_lgnum        = iv_lgnum
+      IMPORTING
+        ev_tzone        = lv_timezone
+      EXCEPTIONS
+        interface_error = 1
+        data_not_found  = 2
+        OTHERS          = 3.
+
+    IF sy-subrc = 0.
+
+      CLEAR: ls_inrecords_bbd, lt_inrecords_bbd, lt_outrecords_bbd, lv_tstamp_bbd.
+
+      CONVERT DATE gv_bbdat
+            INTO TIME STAMP lv_tstamp_bbd
+            TIME ZONE lv_timezone.
+
+      ls_inrecords_bbd-docid   = iv_docid.
+      ls_inrecords_bbd-itemid  = iv_itemid.
+      ls_inrecords_bbd-tzonebb = lv_timezone.
+      ls_inrecords_bbd-tstfrbb = lv_tstamp_bbd.
+      ls_inrecords_bbd-tsttobb = lv_tstamp_bbd.
+
+      APPEND ls_inrecords_bbd TO lt_inrecords_bbd.
+
+      lo_dlv->/scdl/if_sp1_aspect~update(
+        EXPORTING
+          aspect       = /scdl/if_sp_c=>sc_asp_item_sapext_prdi
+          inrecords    = lt_inrecords_bbd
+        IMPORTING
+          outrecords   = lt_outrecords_bbd
+          rejected     = lv_rejected
+          return_codes = lt_return_code ).
+
+      IF lv_rejected = abap_true.
+        cv_rejected = abap_true.
+        RETURN.
+      ENDIF.
+
+    ENDIF.
+
+  ENDIF.
+
+  CLEAR lt_item_key.
+  ls_item_key-docid  = iv_docid.
+  ls_item_key-itemid = iv_itemid.
+  APPEND ls_item_key TO lt_item_key.
+
+  CLEAR ls_action.
+  ls_action-action_code = /scdl/if_bo_action_c=>sc_determine.
+
+  lo_dlv->execute(
+    EXPORTING
+      aspect       = /scdl/if_sp_c=>sc_asp_item
+      inkeys       = lt_item_key
+      inparam      = ls_action
+      action       = /scdl/if_sp_c=>sc_act_execute_action
+    IMPORTING
+      outrecords   = lt_outrecords
+      rejected     = lv_rejected
+      return_codes = lt_return_code ).
+
+  IF lv_rejected = abap_true.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  lo_dlv->/scdl/if_sp1_transaction~before_save(
+    IMPORTING rejected = lv_rejected ).
+
+  IF lv_rejected = abap_true.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  lo_dlv->/scdl/if_sp1_transaction~save(
+    IMPORTING rejected = lv_rejected ).
+
+  IF lv_rejected = abap_true.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  COMMIT WORK AND WAIT.
+  CALL METHOD /scwm/cl_tm=>cleanup( ).
+
+  cv_batchno = lv_batchno_ui.
+
+ENDFORM.
+
 FORM frm_determine_packspec_rehu
   USING    iv_matid     TYPE /scwm/de_matid
            iv_plant     TYPE c
