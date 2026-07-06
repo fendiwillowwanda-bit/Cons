@@ -484,6 +484,14 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
 
   COMMIT WORK AND WAIT.
 
+  " lo_pack->init( iv_lock_dlv = abap_true ) took an exclusive lock on
+  " the delivery item; every error path after it already releases the
+  " lock via cleanup( ), but this success path didn't - leaving the
+  " lock held for the rest of the session and causing later actions on
+  " the same delivery (e.g. F3 Batch's own lo_dlv->lock( ) call) to
+  " fail with "Inbound delivery item lock rejected".
+  CALL METHOD /scwm/cl_tm=>cleanup( ).
+
 *--------------------------------------------------------------------*
 * Prepare HU list for 9016
 *--------------------------------------------------------------------*
