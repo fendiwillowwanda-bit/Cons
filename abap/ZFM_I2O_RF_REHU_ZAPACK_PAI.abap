@@ -329,11 +329,19 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
 *--------------------------------------------------------------------*
   CLEAR ls_return.
 
-  READ TABLE lt_return INTO ls_return
-    WITH KEY id     = '/SCWM/CONDTECH_BASIC'
-             number = '006'.
+  " /SCWM/HU_AUTOPACK_IBDLV returns this as a plain W-type message, and
+  " the ID has been observed in lowercase ('/scwm/condtech_basic') at
+  " runtime even though the message class is '/SCWM/CONDTECH_BASIC' -
+  " READ TABLE ... WITH KEY is case-sensitive on character fields, so
+  " match id case-insensitively instead of relying on WITH KEY for it.
+  LOOP AT lt_return INTO ls_return WHERE number = '006'.
+    IF to_upper( ls_return-id ) = '/SCWM/CONDTECH_BASIC'.
+      EXIT.
+    ENDIF.
+    CLEAR ls_return.
+  ENDLOOP.
 
-  IF sy-subrc = 0 AND lt_huhdr IS INITIAL.
+  IF ls_return IS NOT INITIAL AND lt_huhdr IS INITIAL.
     MESSAGE e398(00)
       WITH 'No packaging specification found for the '
            'Material. Please maintain on /SCWM/PACKSPEC '
