@@ -515,6 +515,18 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     gv_pddat        = lv_pddat.
     gv_vendor_batch = lv_vendor_batch.
 
+*--------------------------------------------------------------------*
+* FDS 5596 6.6.12.1-2, scenario "Existing batch entered": batch
+* already exists in the system -> BBD/ProdDate/Vendor Batch retrieved
+* above, no new batch may be created. Flag it so the s046 "Batch is
+* already entered" message (DISPLAY LIKE 'E') fires together with the
+* retrieved values being written back to the RFUI screen below,
+* instead of the normal creation-success message.
+*--------------------------------------------------------------------*
+    IF lv_batch_exists = abap_true.
+      lv_existing_msg = abap_true.
+    ENDIF.
+
   ENDIF.
 
 *--------------------------------------------------------------------*
