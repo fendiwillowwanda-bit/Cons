@@ -212,6 +212,16 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
       RAISING error.
   ENDIF.
 
+  " The persisted delivery item's batch (lv_batch_db) can still be blank
+  " even after the user enters/creates a batch via the RF screen's own
+  " F3 Batch step (lv_batch, read earlier from CHARG_VERIF/CHARG/BATCH),
+  " if that entry hasn't been committed to /scdl/db_proci_i yet. Per the
+  " FDS ("Or just click the Batch"), a screen-entered batch is valid on
+  " its own - fall back to it instead of discarding it and erroring out.
+  IF lv_batch_db IS INITIAL AND lv_batch IS NOT INITIAL.
+    lv_batch_db = lv_batch.
+  ENDIF.
+
   IF lv_batch_db IS INITIAL.
 
     CLEAR: lv_plant, lv_xchpf, lv_xchpf_found.
