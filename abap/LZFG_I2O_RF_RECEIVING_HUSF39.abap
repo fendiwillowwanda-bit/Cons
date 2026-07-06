@@ -128,8 +128,12 @@ FORM frm_build_autopack_items_rehu
   ENDIF.
 
 *--------------------------------------------------------------------*
-* PackSpec condition key: Supply Chain Unit = SCU<plant>
-* Convert LOCNO to LOCID for PAK_LOCID
+* PackSpec condition key: Supply Chain Unit (PAK_LOCID)
+* Try multiple LOCNO conventions, same priority order used by the
+* proven-working Process Order receiving flow (frm_build_autopack_
+* items_mrhu): entitled as-is first, then 'SCU'+plant, then a
+* reconstructed 'PLANT'+plant. Whichever one actually has a location
+* master record in /SAPAPO/LOC wins; the others are no-ops.
 *--------------------------------------------------------------------*
   CLEAR: lv_plant,
          lv_scu,
@@ -139,12 +143,28 @@ FORM frm_build_autopack_items_rehu
     USING    lv_entitled
     CHANGING lv_plant.
 
-  IF lv_plant IS NOT INITIAL.
+  IF lv_pak_locid IS INITIAL AND lv_entitled IS NOT INITIAL.
+    SELECT SINGLE locid
+      FROM /sapapo/loc
+      WHERE locno = @lv_entitled
+      INTO @lv_pak_locid.
+  ENDIF.
+
+  IF lv_pak_locid IS INITIAL AND lv_plant IS NOT INITIAL.
     CONCATENATE 'SCU' lv_plant INTO lv_scu. "e.g. SCUSGAD
 
     SELECT SINGLE locid
       FROM /sapapo/loc
       WHERE locno = @lv_scu
+      INTO @lv_pak_locid.
+  ENDIF.
+
+  IF lv_pak_locid IS INITIAL AND lv_plant IS NOT INITIAL.
+    DATA(lv_locno_plant) = |PLANT{ lv_plant }|.
+
+    SELECT SINGLE locid
+      FROM /sapapo/loc
+      WHERE locno = @lv_locno_plant
       INTO @lv_pak_locid.
   ENDIF.
 
