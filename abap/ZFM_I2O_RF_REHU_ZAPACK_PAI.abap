@@ -221,7 +221,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
       CHANGING lv_plant.
 
     IF lv_plant IS NOT INITIAL.
-      SELECT SINGLE xchpf
+      SELECT SINGLE xchpf ##WARN_OK
         FROM marc
         INTO @lv_xchpf
         WHERE matnr = @lv_prod_db
