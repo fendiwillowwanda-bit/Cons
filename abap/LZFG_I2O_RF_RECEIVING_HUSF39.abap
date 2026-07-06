@@ -299,6 +299,8 @@ FORM frm_ensure_batch_rehu
       return_codes = lt_return_code ).
 
   IF lv_rejected = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
     cv_rejected = abap_true.
     RETURN.
   ENDIF.
@@ -341,6 +343,8 @@ FORM frm_ensure_batch_rehu
           return_codes = lt_return_code ).
 
       IF lv_rejected = abap_true.
+        CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+        CALL METHOD /scwm/cl_tm=>cleanup( ).
         cv_rejected = abap_true.
         RETURN.
       ENDIF.
@@ -369,6 +373,8 @@ FORM frm_ensure_batch_rehu
       return_codes = lt_return_code ).
 
   IF lv_rejected = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
     cv_rejected = abap_true.
     RETURN.
   ENDIF.
@@ -377,6 +383,8 @@ FORM frm_ensure_batch_rehu
     IMPORTING rejected = lv_rejected ).
 
   IF lv_rejected = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
     cv_rejected = abap_true.
     RETURN.
   ENDIF.
@@ -385,6 +393,8 @@ FORM frm_ensure_batch_rehu
     IMPORTING rejected = lv_rejected ).
 
   IF lv_rejected = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
     cv_rejected = abap_true.
     RETURN.
   ENDIF.
