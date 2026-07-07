@@ -922,6 +922,14 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   COMMIT WORK AND WAIT.
 
+  " Diagnostic only: a manual post via /SCWM/DIFF_ANALYZER done a few
+  " seconds after this same PI POST step succeeds cleanly, while
+  " calling POST() immediately in-line here rejects with
+  " /SCWM/GM 014 - testing whether a short delay changes the outcome
+  " before pursuing a more invasive fix (e.g. decoupling this call
+  " into its own session/LUW).
+  WAIT UP TO 2 SECONDS.
+
 *--------------------------------------------------------------------*
 * Diff Analyzer - automatically post remaining stock
 * differences to reconcile EWM stock with actual consumed qty.
@@ -966,7 +974,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         EXPORTING
           iv_lgnum      = lv_lgnum
           iv_diff_pi    = abap_true
-          iv_lock       = abap_true
+          iv_lock       = abap_false
           it_matid      = lt_matid_diff
         IMPORTING
           et_asp_od_itm = lt_asp_od_itm
