@@ -922,13 +922,14 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   COMMIT WORK AND WAIT.
 
-  " Diagnostic only: a manual post via /SCWM/DIFF_ANALYZER done a few
-  " seconds after this same PI POST step succeeds cleanly, while
-  " calling POST() immediately in-line here rejects with
-  " /SCWM/GM 014 - testing whether a short delay changes the outcome
-  " before pursuing a more invasive fix (e.g. decoupling this call
-  " into its own session/LUW).
-  WAIT UP TO 2 SECONDS.
+  " Diagnostic: the RF framework is still in FOREGROUND processing mode
+  " here (ZFM_I2O_RF_MICOTR_MIQUSL_PAI only switches to BACKGROUND
+  " after this whole function returns). A manual post via
+  " /SCWM/DIFF_ANALYZER - which has no such RF mode at all - succeeds
+  " cleanly for the exact same data, while this in-line call rejects
+  " with /SCWM/GM 014. Testing whether negative-stock handling differs
+  " by RF processing mode before pursuing a more invasive fix.
+  /scwm/cl_rf_bll_srvc=>set_prmod( /scwm/cl_rf_bll_srvc=>c_prmod_background ).
 
 *--------------------------------------------------------------------*
 * Diff Analyzer - automatically post remaining stock
@@ -1073,6 +1074,14 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     CATCH cx_root.
       MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDTRY.
+
+  " Restore the RF processing mode the caller expects for its own
+  " later set_prmod(background) call and subsequent screen handling.
+  " NOTE: the MESSAGE ... RAISING error calls above exit this function
+  " immediately and bypass this restore - acceptable for this
+  " diagnostic pass since an error already aborts the RF step, but
+  " worth revisiting once the underlying hypothesis is confirmed.
+  /scwm/cl_rf_bll_srvc=>set_prmod( /scwm/cl_rf_bll_srvc=>c_prmod_foreground ).
 
 *--------------------------------------------------------------------*
 * Hand back consumed qty/uom for the caller's 261
