@@ -953,9 +953,9 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         lv_diff_rejected     TYPE xfeld.
 
   FIELD-SYMBOLS:
-    <ls_od_itm>         TYPE any,
-    <lv_od_guid_stock>  TYPE any,
-    <lv_od_guid_stock0> TYPE any.
+    <ls_od_itm>          TYPE any,
+    <lv_od_quan_target>  TYPE any,
+    <lv_od_quan_actual>  TYPE any.
 
   TRY.
       CALL FUNCTION '/SCWM/DIFF_ANALYZER_GET_INST'
@@ -995,41 +995,44 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * would otherwise block this transaction's own valid difference from
 * ever posting.
 *
-* A single PI count naturally produces a *pair* of od_itm rows
-* sharing one GUID_STOCK0 (the original quant): one row *against the
-* original quant itself* (GUID_STOCK = GUID_STOCK0) and one *against
-* the new quant created by the count* (GUID_STOCK <> GUID_STOCK0).
-* Both rows are kept - a manual isolated test confirmed that posting
-* only one half of the pair does not reliably avoid the
-* /SCWM/GM 014 "no negative quantities" rejection seen during earlier
-* testing; posting both together *can* succeed (confirmed via a
-* separate manual test in /SCWM/DIFF_ANALYZER done shortly after this
-* transaction's PI POST step), which points to a timing/settling
-* issue between our PI POST commit and this Diff Analyzer call rather
-* than these two rows being genuinely incompatible. See the timing
-* note below.
+* GUID_STOCK0 turned out to be shared across *every* outstanding
+* difference for this material+batch combination, not unique per
+* test/quant - filtering on it (an earlier attempt) let every leftover
+* difference from previous test runs ride along in the same batch.
+* Since POST() rejects its entire batch if even one item fails, any
+* one stuck leftover from an earlier run blocked this run's own valid
+* pair from ever posting.
+*
+* A single PI count produces a *pair* of od_itm rows: one against the
+* original quant (QUAN_TARGET = planned qty, QUAN_ACTUAL = 0) and one
+* against the new quant the count created (QUAN_TARGET = 0,
+* QUAN_ACTUAL = counted qty). These exact quantities are known to us
+* (lv_plan_qty / lv_actual_qty), so matching on them reliably isolates
+* just this transaction's own pair regardless of how many older,
+* still-unresolved differences exist for this material+batch.
 *
 * LT_ASP_OI_CUM is left untouched: it aggregates at a coarser level
 * shared across all items for this material and does not need to
 * mirror this item-level filter.
 *--------------------------------------------------------------------*
-      IF lv_guid_stock IS NOT INITIAL.
-        CLEAR lt_asp_od_itm_scoped.
+      CLEAR lt_asp_od_itm_scoped.
 
-        LOOP AT lt_asp_od_itm ASSIGNING <ls_od_itm>.
-          UNASSIGN <lv_od_guid_stock0>.
+      LOOP AT lt_asp_od_itm ASSIGNING <ls_od_itm>.
+        UNASSIGN: <lv_od_quan_target>, <lv_od_quan_actual>.
 
-          ASSIGN COMPONENT 'GUID_STOCK0' OF STRUCTURE <ls_od_itm> TO <lv_od_guid_stock0>.
+        ASSIGN COMPONENT 'QUAN_TARGET' OF STRUCTURE <ls_od_itm> TO <lv_od_quan_target>.
+        ASSIGN COMPONENT 'QUAN_ACTUAL' OF STRUCTURE <ls_od_itm> TO <lv_od_quan_actual>.
 
-          IF <lv_od_guid_stock0> IS ASSIGNED
-             AND <lv_od_guid_stock0> = lv_guid_stock.
-            APPEND <ls_od_itm> TO lt_asp_od_itm_scoped.
-          ENDIF.
-        ENDLOOP.
+        CHECK <lv_od_quan_target> IS ASSIGNED AND <lv_od_quan_actual> IS ASSIGNED.
 
-        IF lt_asp_od_itm_scoped IS NOT INITIAL.
-          lt_asp_od_itm = lt_asp_od_itm_scoped.
+        IF ( <lv_od_quan_target> = lv_plan_qty   AND <lv_od_quan_actual> = 0 )
+        OR ( <lv_od_quan_target> = 0             AND <lv_od_quan_actual> = lv_actual_qty ).
+          APPEND <ls_od_itm> TO lt_asp_od_itm_scoped.
         ENDIF.
+      ENDLOOP.
+
+      IF lt_asp_od_itm_scoped IS NOT INITIAL.
+        lt_asp_od_itm = lt_asp_od_itm_scoped.
       ENDIF.
 
       IF lt_asp_od_itm IS INITIAL.
