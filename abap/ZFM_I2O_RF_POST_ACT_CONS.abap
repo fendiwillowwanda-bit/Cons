@@ -976,22 +976,29 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       ENDIF.
 
 *--------------------------------------------------------------------*
-* Scope down to only the difference tied to the exact quant this
-* transaction resolved earlier via /SCWM/SELECT_STOCK (lv_guid_stock).
-* GET_DIFFERENCES returns every outstanding PI difference for the
-* material across the whole warehouse, and POST() rejects the entire
-* batch if even one unrelated item fails (e.g. a stuck/unresolved
-* difference left behind on a different HU) - which would otherwise
-* block this transaction's own valid difference from ever posting.
-* LT_ASP_OI_CUM is left untouched: it aggregates at a coarser level
-* (shared across all items for this material) and does not need to
-* mirror this item-level filter.
+* Scope down to only the differences tied to the exact original quant
+* this transaction resolved earlier via /SCWM/SELECT_STOCK
+* (lv_guid_stock). GET_DIFFERENCES returns every outstanding PI
+* difference for the material across the whole warehouse, and POST()
+* rejects the entire batch if even one unrelated item fails (e.g. a
+* stuck/unresolved difference left behind on a different HU) - which
+* would otherwise block this transaction's own valid difference from
+* ever posting.
+*
+* Filter on GUID_STOCK0, not GUID_STOCK: a single PI count naturally
+* produces a *pair* of od_itm rows sharing one GUID_STOCK0 (the
+* original quant) - one row against the original quant itself and one
+* against the new quant created by the count - each with its own,
+* different GUID_STOCK. Filtering on GUID_STOCK would keep only one
+* half of that pair and silently drop the other. LT_ASP_OI_CUM is left
+* untouched: it aggregates at a coarser level shared across all items
+* for this material and does not need to mirror this filter.
 *--------------------------------------------------------------------*
       IF lv_guid_stock IS NOT INITIAL.
         CLEAR lt_asp_od_itm_scoped.
 
         LOOP AT lt_asp_od_itm ASSIGNING <ls_od_itm>.
-          ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE <ls_od_itm> TO <lv_od_guid_stock>.
+          ASSIGN COMPONENT 'GUID_STOCK0' OF STRUCTURE <ls_od_itm> TO <lv_od_guid_stock>.
           IF sy-subrc = 0 AND <lv_od_guid_stock> = lv_guid_stock.
             APPEND <ls_od_itm> TO lt_asp_od_itm_scoped.
           ENDIF.
