@@ -990,24 +990,15 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * sharing one GUID_STOCK0 (the original quant): one row *against the
 * original quant itself* (GUID_STOCK = GUID_STOCK0) and one *against
 * the new quant created by the count* (GUID_STOCK <> GUID_STOCK0).
-*
-* Repeated testing (multiple orders, HUs and quantities) confirmed the
-* "original quant itself" row consistently fails GM_CREATE with
-* /SCWM/GM 014 "no negative quantities" - it is not specific to any
-* one test's data. POST() rejects its *entire* batch if even one item
-* fails, so submitting that row at all blocks the other, valid item
-* from ever posting. Posting only the "new quant" row was confirmed
-* to succeed on its own (via a manual isolated test in
-* /SCWM/DIFF_ANALYZER), so it is excluded deliberately here, not
-* silently dropped as a side effect.
-*
-* Operational consequence: the "original quant" side of this
-* reconciliation is intentionally left unresolved by this RF
-* transaction and will keep reappearing in /SCWM/DIFF_ANALYZER for
-* this product until it is cleared through a separate process (e.g. a
-* manual stock correction or periodic supervisor review) - this is a
-* business tradeoff to confirm with the FDS owner, not just a
-* technical detail.
+* Both rows are kept - a manual isolated test confirmed that posting
+* only one half of the pair does not reliably avoid the
+* /SCWM/GM 014 "no negative quantities" rejection seen during earlier
+* testing; posting both together *can* succeed (confirmed via a
+* separate manual test in /SCWM/DIFF_ANALYZER done shortly after this
+* transaction's PI POST step), which points to a timing/settling
+* issue between our PI POST commit and this Diff Analyzer call rather
+* than these two rows being genuinely incompatible. See the timing
+* note below.
 *
 * LT_ASP_OI_CUM is left untouched: it aggregates at a coarser level
 * shared across all items for this material and does not need to
@@ -1017,15 +1008,12 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         CLEAR lt_asp_od_itm_scoped.
 
         LOOP AT lt_asp_od_itm ASSIGNING <ls_od_itm>.
-          UNASSIGN: <lv_od_guid_stock0>, <lv_od_guid_stock>.
+          UNASSIGN <lv_od_guid_stock0>.
 
           ASSIGN COMPONENT 'GUID_STOCK0' OF STRUCTURE <ls_od_itm> TO <lv_od_guid_stock0>.
-          ASSIGN COMPONENT 'GUID_STOCK'  OF STRUCTURE <ls_od_itm> TO <lv_od_guid_stock>.
 
           IF <lv_od_guid_stock0> IS ASSIGNED
-             AND <lv_od_guid_stock>  IS ASSIGNED
-             AND <lv_od_guid_stock0> = lv_guid_stock
-             AND <lv_od_guid_stock>  <> <lv_od_guid_stock0>.
+             AND <lv_od_guid_stock0> = lv_guid_stock.
             APPEND <ls_od_itm> TO lt_asp_od_itm_scoped.
           ENDIF.
         ENDLOOP.
