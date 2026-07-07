@@ -565,6 +565,29 @@ FORM frm_build_autopack_items_rehu
       INTO @ls_proci.
   ENDIF.
 
+  " Falling straight through to "docid only" below (a multi-item
+  " delivery) grabs whatever row the DB returns first, regardless of
+  " which product was actually scanned - confirmed live: it picked
+  " item 10's product instead of the intended item 20, so the wrong
+  " PackSpec (belonging to item 10's material) got determined. Match
+  " by the scanned product first, same fallback used in
+  " ZFM_I2O_RF_REHU_CRT_BATCH_PAI, before resorting to that blind grab.
+  IF sy-subrc <> 0 AND iv_prod IS NOT INITIAL.
+    DATA(lv_prod_lookup) = CONV matnr( iv_prod ).
+
+    CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
+      EXPORTING
+        input  = lv_prod_lookup
+      IMPORTING
+        output = lv_prod_lookup.
+
+    SELECT SINGLE *
+      FROM /scdl/db_proci_i
+      WHERE docid     = @iv_docid
+        AND productno = @lv_prod_lookup
+      INTO @ls_proci.
+  ENDIF.
+
   IF sy-subrc <> 0.
     SELECT SINGLE *
       FROM /scdl/db_proci_i
@@ -587,6 +610,11 @@ FORM frm_build_autopack_items_rehu
   READ TABLE is_rehu-itms INTO ls_rehu_item
     WITH KEY docid  = iv_docid
              itemid = lv_itemid.
+
+  IF sy-subrc <> 0 AND lv_prod_int IS NOT INITIAL.
+    READ TABLE is_rehu-itms INTO ls_rehu_item
+      WITH KEY product-productno = lv_prod_int.
+  ENDIF.
 
   IF sy-subrc <> 0.
     READ TABLE is_rehu-itms INTO ls_rehu_item
