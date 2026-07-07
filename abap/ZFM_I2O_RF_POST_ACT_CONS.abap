@@ -39,6 +39,13 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     lv_match      TYPE abap_bool,
     lv_recount    TYPE abap_bool.
 
+  " Identifies the exact quant this transaction resolved via
+  " /SCWM/SELECT_STOCK, so the Diff Analyzer step below can be scoped
+  " to just this stock item instead of every outstanding difference
+  " for the material (see GUID_STOCK usage further down).
+  DATA:
+    lv_guid_stock TYPE x LENGTH 16.
+
   " Order/component material that this consumption step is bound to.
   " Used to validate the material resolved from the scanned HU is
   " actually the BOM component of the Process Order (FDS error
@@ -433,7 +440,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     MESSAGE e051(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
-  CLEAR: lv_matid, lv_batchid.
+  CLEAR: lv_matid, lv_batchid, lv_guid_stock.
 
   ASSIGN COMPONENT 'MATID' OF STRUCTURE <ls_huitm> TO <lv_src>.
   IF sy-subrc = 0.
@@ -443,6 +450,11 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ASSIGN COMPONENT 'BATCHID' OF STRUCTURE <ls_huitm> TO <lv_src>.
   IF sy-subrc = 0.
     lv_batchid = <lv_src>.
+  ENDIF.
+
+  ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE <ls_huitm> TO <lv_src>.
+  IF sy-subrc = 0.
+    lv_guid_stock = <lv_src>.
   ENDIF.
 
   IF lv_matid IS INITIAL.
@@ -921,14 +933,19 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * succeeded - otherwise EWM stock and the Process Order consumption
 * could end up inconsistent with no trace of why.
 *--------------------------------------------------------------------*
-  DATA: lo_diff_analyzer TYPE REF TO /scwm/if_diff_analyzer,
-        lt_asp_od_itm    TYPE /scwm/tt_asp_diff_od_itm,
-        lt_asp_oi_cum    TYPE /scwm/tt_asp_diff_oi_cum,
-        lt_diff_post     TYPE /scwm/tt_diff_post,
-        lt_diff_bapiret  TYPE bapirettab,
-        ls_diff_bapiret  LIKE LINE OF lt_diff_bapiret,
-        lt_matid_diff    TYPE /scwm/tt_matid,
-        lv_diff_rejected TYPE xfeld.
+  DATA: lo_diff_analyzer     TYPE REF TO /scwm/if_diff_analyzer,
+        lt_asp_od_itm        TYPE /scwm/tt_asp_diff_od_itm,
+        lt_asp_od_itm_scoped TYPE /scwm/tt_asp_diff_od_itm,
+        lt_asp_oi_cum        TYPE /scwm/tt_asp_diff_oi_cum,
+        lt_diff_post         TYPE /scwm/tt_diff_post,
+        lt_diff_bapiret      TYPE bapirettab,
+        ls_diff_bapiret      LIKE LINE OF lt_diff_bapiret,
+        lt_matid_diff        TYPE /scwm/tt_matid,
+        lv_diff_rejected     TYPE xfeld.
+
+  FIELD-SYMBOLS:
+    <ls_od_itm>        TYPE any,
+    <lv_od_guid_stock>  TYPE any.
 
   TRY.
       CALL FUNCTION '/SCWM/DIFF_ANALYZER_GET_INST'
@@ -953,6 +970,37 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         IMPORTING
           et_asp_od_itm = lt_asp_od_itm
           et_asp_oi_cum = lt_asp_oi_cum ).
+
+      IF lt_asp_od_itm IS INITIAL.
+        MESSAGE e057(zmsg_i2o_rf) RAISING error.
+      ENDIF.
+
+*--------------------------------------------------------------------*
+* Scope down to only the difference tied to the exact quant this
+* transaction resolved earlier via /SCWM/SELECT_STOCK (lv_guid_stock).
+* GET_DIFFERENCES returns every outstanding PI difference for the
+* material across the whole warehouse, and POST() rejects the entire
+* batch if even one unrelated item fails (e.g. a stuck/unresolved
+* difference left behind on a different HU) - which would otherwise
+* block this transaction's own valid difference from ever posting.
+* LT_ASP_OI_CUM is left untouched: it aggregates at a coarser level
+* (shared across all items for this material) and does not need to
+* mirror this item-level filter.
+*--------------------------------------------------------------------*
+      IF lv_guid_stock IS NOT INITIAL.
+        CLEAR lt_asp_od_itm_scoped.
+
+        LOOP AT lt_asp_od_itm ASSIGNING <ls_od_itm>.
+          ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE <ls_od_itm> TO <lv_od_guid_stock>.
+          IF sy-subrc = 0 AND <lv_od_guid_stock> = lv_guid_stock.
+            APPEND <ls_od_itm> TO lt_asp_od_itm_scoped.
+          ENDIF.
+        ENDLOOP.
+
+        IF lt_asp_od_itm_scoped IS NOT INITIAL.
+          lt_asp_od_itm = lt_asp_od_itm_scoped.
+        ENDIF.
+      ENDIF.
 
       IF lt_asp_od_itm IS INITIAL.
         MESSAGE e057(zmsg_i2o_rf) RAISING error.
