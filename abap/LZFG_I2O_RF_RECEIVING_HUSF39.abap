@@ -827,10 +827,11 @@ FORM frm_build_autopack_items_rehu
     get_comp 'STOCK_TYPE' lv_cat ls_proci.
   ENDIF.
 
-  IF lv_cat = 'P'.
-    lv_cat = 'P2'.
-  ENDIF.
-
+* Confirmed live via debugger: for Procurement, ls_proci's raw CAT
+* resolves to 'F2', not 'P' - the 'P' -> 'P2' override copied from the
+* Process Order flow never actually applied here, it was a dead branch
+* for this scenario. Removed so lv_cat is used exactly as resolved
+* from the delivery item, matching what /scwm/aqua actually stores.
 *--------------------------------------------------------------------*
 * VFDAT / SLED
 *--------------------------------------------------------------------*
