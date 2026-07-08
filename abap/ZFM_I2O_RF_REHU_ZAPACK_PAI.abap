@@ -291,7 +291,13 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
                  lv_batch_rejected.
 
       IF lv_batch_rejected = abap_true OR lv_batch_db IS INITIAL.
-        MESSAGE e029(zmsg_i2o_rf) RAISING error.
+        " Surface the same standard "Product subject to batch
+        " management requirement" message F1 Pack itself would show
+        " here, instead of the generic e029, so the user sees a
+        " familiar, specific reason (batch-managed material, batch
+        " could not be created/assigned - e.g. missing BBD) rather than
+        " a vague rejection.
+        MESSAGE e395(/scwm/rf_en) WITH lv_prod_db RAISING error.
       ENDIF.
 
       " The batch now lives on a NEW batch-split (BSP) subitem, not the
