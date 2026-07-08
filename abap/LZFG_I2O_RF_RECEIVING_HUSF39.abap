@@ -96,6 +96,8 @@ FORM frm_ensure_batch_rehu
         lt_inrecords_prod  TYPE /scdl/t_sp_a_item_product,
         lt_outrecords_prod TYPE /scdl/t_sp_a_item_product.
 
+  DATA ls_product_now TYPE /scdl/dl_product_str.
+
   DATA: ls_inrecords_bbd  TYPE /scdl/s_sp_a_item_sapext_prdi,
         lt_inrecords_bbd  TYPE /scdl/t_sp_a_item_sapext_prdi,
         lt_outrecords_bbd TYPE /scdl/t_sp_a_item_sapext_prdi.
@@ -303,13 +305,23 @@ FORM frm_ensure_batch_rehu
   " this redundant upfront lock isn't needed to protect data integrity
   " here either.
 
+* Fetch the item's CURRENT product data via the BO layer first, and
+* carry all of it forward into the write - same as pack_item_to_delivery
+* does with ls_items-product-*. Only supplying productid/productno/
+* batchno here (as an earlier version did) leaves productno_ext/
+* productent/product_text blank on the aspect update, which risks
+* nulling those out instead of just adding the batch.
+  lo_bom = /scdl/cl_bo_management=>get_instance( ).
+  lo_bo  = lo_bom->get_bo_by_id( iv_docid ).
+  lo_item ?= lo_bo->get_item( iv_itemid ).
+  ls_product_now = lo_item->get_product( ).
+
   CLEAR: ls_inrecords_prod, lt_inrecords_prod, lt_outrecords_prod.
 
-  ls_inrecords_prod-docid     = iv_docid.
-  ls_inrecords_prod-itemid    = iv_itemid.
-  ls_inrecords_prod-productid = lv_matid.
-  ls_inrecords_prod-productno = iv_matnr_int.
-  ls_inrecords_prod-batchno   = lv_batchno_ui.
+  MOVE-CORRESPONDING ls_product_now TO ls_inrecords_prod.
+  ls_inrecords_prod-docid   = iv_docid.
+  ls_inrecords_prod-itemid  = iv_itemid.
+  ls_inrecords_prod-batchno = lv_batchno_ui.
 
   APPEND ls_inrecords_prod TO lt_inrecords_prod.
 
@@ -385,9 +397,8 @@ FORM frm_ensure_batch_rehu
 *--------------------------------------------------------------------*
   IF lo_batch IS BOUND.
 
-    lo_bom = /scdl/cl_bo_management=>get_instance( ).
-    lo_bo  = lo_bom->get_bo_by_id( iv_docid ).
-    lo_item ?= lo_bo->get_item( iv_itemid ).
+    " lo_bo/lo_item were already fetched above, before the item_product
+    " write - reused here as-is.
 
     TRY.
         IF lo_batch->mo_valuat_mng IS BOUND.
