@@ -59,8 +59,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lv_rejected         TYPE boole_d,
     lv_timezone         TYPE tznzone,
     lv_tstamp_bbd       TYPE timestamp,
-    lv_item_time_dummy  TYPE syst-uzeit,
-    lv_new_itemid       TYPE /scdl/dl_itemid.
+    lv_item_time_dummy  TYPE syst-uzeit.
 
   DATA:
     ls_mara_shelf TYPE ty_mara_shelf,
@@ -818,52 +817,11 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
       OTHERS     = 1.
 
 *--------------------------------------------------------------------*
-* Partial qty: split into a new BSP subitem and attach batch/BBD to
-* that subitem right here - ported out of pack_item_to_delivery's own
-* "partial / tolerance-overage" branch so F3 Batch persists to the
-* item on its own for partial qty too, without depending on F1 Pack
-* ever being pressed afterward.
-*--------------------------------------------------------------------*
-  IF lv_full_qty = abap_false.
-
-    PERFORM frm_save_batch_split_qty
-      USING    cs_rehu-lgnum
-               cs_rehu_hu-docid
-               cs_rehu_hu-ritmid
-               cs_rehu_hu-rdoccat
-               cs_rehu_prod-matid
-               cs_rehu_prod-charg
-               lv_bbdat
-               lv_qty_screen
-      CHANGING lv_new_itemid
-               lv_rejected.
-
-    IF lv_rejected = abap_true.
-      MESSAGE e045(zmsg_i2o_rf).
-    ENDIF.
-
-    IF lv_new_itemid IS NOT INITIAL.
-      cs_rehu_prod-ritmid = lv_new_itemid.
-      cs_rehu_hu-ritmid   = lv_new_itemid.
-    ENDIF.
-
-    /scwm/cl_rf_bll_srvc=>set_field( space ).
-    /scwm/cl_rf_bll_srvc=>set_prmod(
-      /scwm/cl_rf_bll_srvc=>c_prmod_foreground ).
-    /scwm/cl_rf_bll_srvc=>set_fcode( lc_pbo2 ).
-
-    IF lv_existing_msg = abap_true.
-      MESSAGE s046(zmsg_i2o_rf) DISPLAY LIKE 'E'.
-    ELSE.
-      MESSAGE s050(zmsg_i2o_rf).
-    ENDIF.
-
-    RETURN.
-
-  ENDIF.
-
-*--------------------------------------------------------------------*
-* Full qty only: assign batch/BBD directly to original item
+* Full qty AND partial qty: assign batch/BBD directly to the SAME
+* item, no split/subitem - the actual split into a new BSP subitem
+* for partial receiving is left entirely to F1 Pack, same as before.
+* F3 Batch's job is only to make sure batch/BBD/prod date/vendor batch
+* are persisted to the delivery item either way.
 *--------------------------------------------------------------------*
   /scwm/cl_tm=>set_lgnum( cs_rehu-lgnum ).
 
@@ -1031,12 +989,13 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   CALL METHOD /scwm/cl_tm=>cleanup( ).
 
 *--------------------------------------------------------------------*
-* Safety check: this is the "full qty, no split" path - batch/BBD was
-* written directly onto cs_rehu_hu-ritmid, no BSP subitem should exist
-* for it. If one got created anyway (e.g. framework-internal
-* doc-batch-relevant determination behind the scenes), that violates
-* the FDS requirement and must surface as an error rather than be
-* silently accepted.
+* Safety check: F3 Batch never splits (full or partial qty alike) -
+* batch/BBD was written directly onto cs_rehu_hu-ritmid, no BSP
+* subitem should exist for it yet. If one got created anyway (e.g.
+* framework-internal doc-batch-relevant determination behind the
+* scenes), that must surface as an error rather than be silently
+* accepted - the actual split for partial qty is F1 Pack's job, not
+* something that should happen here.
 *--------------------------------------------------------------------*
   DATA: lt_items_post       TYPE /scwm/dlv_item_out_prd_tab,
         ls_docid_query_post TYPE /scwm/dlv_docid_item_str,
