@@ -212,6 +212,22 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
     MESSAGE e030(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
+  " Remember whether the item ALREADY had a batch persisted on it
+  " (priority 1/2/3 lookup above) before the screen-value fallback
+  " below can fill lv_batch_db in from the RF screen instead. That
+  " fallback used to also skip the whole frm_ensure_batch_rehu block
+  " further down (since it made lv_batch_db non-initial), meaning a
+  " batch typed on screen but never actually split/attached onto this
+  " item (e.g. left over from an earlier attempt, or just typed and
+  " not yet saved) was accepted as-is without ever creating the proper
+  " BSP subitem - confirmed live via debugger: frm_ensure_batch_rehu
+  " was never reached, and /SCWM/HU_AUTOPACK_IBDLV then failed with
+  " "Could not find the item to pack". Gate on lv_batch_persisted
+  " instead so frm_ensure_batch_rehu still runs in that case - its own
+  " existence check safely no-ops (just returns the item as-is) if the
+  " batch turns out to already be properly attached.
+  DATA(lv_batch_persisted) = xsdbool( lv_batch_db IS NOT INITIAL ).
+
   " The persisted delivery item's batch (lv_batch_db) can still be blank
   " even after the user enters/creates a batch via the RF screen's own
   " F3 Batch step (lv_batch, read earlier from CHARG_VERIF/CHARG/BATCH),
@@ -222,7 +238,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
     lv_batch_db = lv_batch.
   ENDIF.
 
-  IF lv_batch_db IS INITIAL.
+  IF lv_batch_persisted = abap_false.
 
     CLEAR: lv_plant, lv_xchpf, lv_xchpf_found.
 
