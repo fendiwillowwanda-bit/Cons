@@ -96,7 +96,12 @@ FORM frm_ensure_batch_rehu
         lt_inrecords_prod  TYPE /scdl/t_sp_a_item_product,
         lt_outrecords_prod TYPE /scdl/t_sp_a_item_product.
 
-  DATA ls_product_now TYPE /scdl/dl_product_str.
+  DATA: lo_query           TYPE REF TO /scwm/cl_dlv_management_prd,
+        ls_docid_query_now TYPE /scwm/dlv_docid_item_str,
+        lt_docid_query_now TYPE /scwm/dlv_docid_item_tab,
+        ls_read_opt_now    TYPE /scwm/dlv_query_contr_str,
+        ls_items_now       TYPE /scwm/dlv_item_out_prd_str,
+        lt_items_now       TYPE /scwm/dlv_item_out_prd_tab.
 
   DATA: ls_inrecords_bbd  TYPE /scdl/s_sp_a_item_sapext_prdi,
         lt_inrecords_bbd  TYPE /scdl/t_sp_a_item_sapext_prdi,
@@ -305,23 +310,60 @@ FORM frm_ensure_batch_rehu
   " this redundant upfront lock isn't needed to protect data integrity
   " here either.
 
-* Fetch the item's CURRENT product data via the BO layer first, and
-* carry all of it forward into the write - same as pack_item_to_delivery
-* does with ls_items-product-*. Only supplying productid/productno/
-* batchno here (as an earlier version did) leaves productno_ext/
-* productent/product_text blank on the aspect update, which risks
-* nulling those out instead of just adding the batch.
+* Fetch the item's CURRENT product data first, via the same query +
+* mix_in_load_instance pack_item_to_delivery itself uses at its top
+* (there: it_docid/iv_whno/is_read_options with
+* sc_mix_in_load_instance, before it ever touches lo_bo). That query
+* is also what populates /scdl/cl_bo_management's cache for this
+* docid - a bare "SELECT * FROM /scdl/db_proci_i" (as done above for
+* lv_matid) does NOT load it, so calling get_bo_by_id( ) without this
+* query first returns an unbound reference and dumps
+* (CX_SY_REF_IS_INITIAL) the moment get_item( ) is called on it.
+  CLEAR lt_docid_query_now.
+  ls_docid_query_now-docid  = iv_docid.
+  ls_docid_query_now-itemid = iv_itemid.
+  APPEND ls_docid_query_now TO lt_docid_query_now.
+
+  ls_read_opt_now-mix_in_object_instances = /scwm/if_dl_c=>sc_mix_in_load_instance.
+
+  IF lo_query IS NOT BOUND.
+    CREATE OBJECT lo_query.
+  ENDIF.
+
+  TRY.
+      lo_query->query(
+        EXPORTING
+          it_docid        = lt_docid_query_now
+          iv_whno         = iv_lgnum
+          is_read_options = ls_read_opt_now
+        IMPORTING
+          et_items        = lt_items_now ).
+    CATCH /scdl/cx_delivery.
+      cv_rejected = abap_true.
+      RETURN.
+  ENDTRY.
+
+  READ TABLE lt_items_now INTO ls_items_now WITH KEY itemid = iv_itemid.
+
+  IF sy-subrc <> 0.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
   lo_bom = /scdl/cl_bo_management=>get_instance( ).
   lo_bo  = lo_bom->get_bo_by_id( iv_docid ).
   lo_item ?= lo_bo->get_item( iv_itemid ).
-  ls_product_now = lo_item->get_product( ).
 
   CLEAR: ls_inrecords_prod, lt_inrecords_prod, lt_outrecords_prod.
 
-  MOVE-CORRESPONDING ls_product_now TO ls_inrecords_prod.
-  ls_inrecords_prod-docid   = iv_docid.
-  ls_inrecords_prod-itemid  = iv_itemid.
-  ls_inrecords_prod-batchno = lv_batchno_ui.
+  ls_inrecords_prod-docid         = iv_docid.
+  ls_inrecords_prod-itemid        = iv_itemid.
+  ls_inrecords_prod-productid     = ls_items_now-product-productid.
+  ls_inrecords_prod-productno     = ls_items_now-product-productno.
+  ls_inrecords_prod-productno_ext = ls_items_now-product-productno_ext.
+  ls_inrecords_prod-productent    = ls_items_now-product-productent.
+  ls_inrecords_prod-product_text  = ls_items_now-product-product_text.
+  ls_inrecords_prod-batchno       = lv_batchno_ui.
 
   APPEND ls_inrecords_prod TO lt_inrecords_prod.
 
