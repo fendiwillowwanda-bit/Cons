@@ -22,6 +22,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lc_dynnr      TYPE sydynnr        VALUE '9015',
     lc_zbatch     TYPE /scwm/de_fcode VALUE 'ZBATCH',
     lc_zclass     TYPE /scwm/de_fcode VALUE 'ZCLASS',
+    lc_zsave      TYPE /scwm/de_fcode VALUE 'ZSAVE',
     lc_pbo2       TYPE /scwm/de_fcode VALUE 'PBO2',
     lc_klart      TYPE klah-klart     VALUE '023',
     lc_class      TYPE klah-class     VALUE 'BC_FERTHALB',
@@ -59,7 +60,8 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lv_rejected         TYPE boole_d,
     lv_timezone         TYPE tznzone,
     lv_tstamp_bbd       TYPE timestamp,
-    lv_item_time_dummy  TYPE syst-uzeit.
+    lv_item_time_dummy  TYPE syst-uzeit,
+    lv_new_itemid       TYPE /scdl/dl_itemid.
 
   DATA:
     ls_mara_shelf TYPE ty_mara_shelf,
@@ -199,10 +201,11 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* From here on, only ZBATCH / ZCLASS fcodes continue processing.
+* From here on, only ZBATCH / ZCLASS / ZSAVE fcodes continue processing.
 *--------------------------------------------------------------------*
   IF lv_fcode <> lc_zbatch
-     AND lv_fcode <> lc_zclass.
+     AND lv_fcode <> lc_zclass
+     AND lv_fcode <> lc_zsave.
     RETURN.
   ENDIF.
 
@@ -817,9 +820,13 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
       OTHERS     = 1.
 
 *--------------------------------------------------------------------*
-* Partial qty only: keep RF context, let actual pack flow handle split
+* ZBATCH: create/validate the batch only - do NOT persist to the item
+* yet, for full qty OR partial qty. The new ZSAVE action below is now
+* the single place that attaches batch/BBD to the delivery item; we no
+* longer rely on F1 Pack to do this for partial qty, nor on ZBATCH
+* auto-saving for full qty.
 *--------------------------------------------------------------------*
-  IF lv_full_qty = abap_false.
+  IF lv_fcode <> lc_zsave.
 
     /scwm/cl_rf_bll_srvc=>set_field( space ).
     /scwm/cl_rf_bll_srvc=>set_prmod(
@@ -837,7 +844,51 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Full qty only: assign batch/BBD directly to original item
+* ZSAVE, partial qty: split into a new BSP subitem and attach batch/
+* BBD to that subitem - ported out of pack_item_to_delivery's own
+* "partial / tolerance-overage" branch so this no longer depends on
+* F1 Pack ever being pressed.
+*--------------------------------------------------------------------*
+  IF lv_full_qty = abap_false.
+
+    PERFORM frm_save_batch_split_qty
+      USING    cs_rehu-lgnum
+               cs_rehu_hu-docid
+               cs_rehu_hu-ritmid
+               cs_rehu_hu-rdoccat
+               cs_rehu_prod-matid
+               cs_rehu_prod-charg
+               lv_bbdat
+               lv_qty_screen
+      CHANGING lv_new_itemid
+               lv_rejected.
+
+    IF lv_rejected = abap_true.
+      MESSAGE e045(zmsg_i2o_rf).
+    ENDIF.
+
+    IF lv_new_itemid IS NOT INITIAL.
+      cs_rehu_prod-ritmid = lv_new_itemid.
+      cs_rehu_hu-ritmid   = lv_new_itemid.
+    ENDIF.
+
+    /scwm/cl_rf_bll_srvc=>set_field( space ).
+    /scwm/cl_rf_bll_srvc=>set_prmod(
+      /scwm/cl_rf_bll_srvc=>c_prmod_foreground ).
+    /scwm/cl_rf_bll_srvc=>set_fcode( lc_pbo2 ).
+
+    IF lv_existing_msg = abap_true.
+      MESSAGE s046(zmsg_i2o_rf) DISPLAY LIKE 'E'.
+    ELSE.
+      MESSAGE s050(zmsg_i2o_rf).
+    ENDIF.
+
+    RETURN.
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* ZSAVE, full qty: assign batch/BBD directly to original item
 *--------------------------------------------------------------------*
   /scwm/cl_tm=>set_lgnum( cs_rehu-lgnum ).
 
