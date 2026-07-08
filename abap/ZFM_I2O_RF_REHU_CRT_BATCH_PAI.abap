@@ -95,15 +95,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lt_item_key   TYPE /scdl/t_sp_k_item,
     ls_item_key   TYPE /scdl/s_sp_k_item,
     ls_action     TYPE /scdl/s_sp_act_action,
-    ls_context    TYPE /scdl/s_sp_act_item_split,
-    lt_outrecords TYPE /scdl/t_sp_a_item,
-    ls_outrecords TYPE /scdl/s_sp_a_item,
-    lv_new_item_id TYPE /scdl/dl_itemid.
-
-  DATA:
-    ls_inrecords_qty  TYPE /scdl/s_sp_a_item_quantity,
-    lt_inrecords_qty  TYPE /scdl/t_sp_a_item_quantity,
-    lt_outrecords_qty TYPE /scdl/t_sp_a_item_quantity.
+    lt_outrecords TYPE /scdl/t_sp_a_item.
 
   DATA:
     lo_query_pre       TYPE REF TO /scwm/cl_dlv_management_prd,
@@ -113,8 +105,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lt_items_pre       TYPE /scwm/dlv_item_out_prd_tab.
 
   FIELD-SYMBOLS:
-    <ls_rehu_prod> TYPE /scwm/s_rf_rehu_prod,
-    <ls_parameter> TYPE any.
+    <ls_rehu_prod> TYPE /scwm/s_rf_rehu_prod.
 
   BREAK-POINT ID /scwm/rf_receiving_hus.
 
@@ -846,95 +837,15 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   " standard SCDL save( ) framework performs its own locking internally
   " as part of persisting the document, so this redundant upfront lock
   " isn't needed to protect data integrity here.
-
 *--------------------------------------------------------------------*
-* Split into a batch (BSP) subitem before attaching the batch, exactly
-* like the standard manual Pack flow (pack_item_to_delivery,
-* /SCWM/LRF_RECEIVING_HUSF13) and Auto Pack's own frm_ensure_batch_rehu
-* fix - only when this item doesn't already carry a batch (matches
-* standard's own condition: "ls_items-product-batchno IS INITIAL").
-* If it's already attached (existing batch scenario, already a proper
-* subitem), no split is needed - just update in place.
-*--------------------------------------------------------------------*
-  CLEAR lv_new_item_id.
-
-  IF ls_item-product-batchno IS INITIAL.
-
-    CLEAR lt_item_key.
-    ls_item_key-docid  = cs_rehu_hu-docid.
-    ls_item_key-itemid = cs_rehu_hu-ritmid.
-    APPEND ls_item_key TO lt_item_key.
-
-    CLEAR ls_action.
-    ls_context-hierarchy_type  = /scdl/if_dl_hierarchy_c=>sc_type_charge.
-    ls_context-number_subitems = 1.
-    ls_action-action_code      = /scdl/if_bo_action_c=>sc_split_item.
-
-    CREATE DATA ls_action-action_control TYPE ('/SCDL/S_SP_ACT_ITEM_SPLIT').
-    ASSIGN ls_action-action_control->* TO <ls_parameter>.
-    MOVE-CORRESPONDING ls_context TO <ls_parameter>.
-
-    lo_dlv->execute(
-      EXPORTING
-        aspect       = /scdl/if_sp_c=>sc_asp_item
-        inkeys       = lt_item_key
-        inparam      = ls_action
-        action       = /scdl/if_sp_c=>sc_act_execute_action
-      IMPORTING
-        outrecords   = lt_outrecords
-        rejected     = lv_rejected
-        return_codes = lt_return_code ).
-
-    IF lv_rejected = abap_true.
-      MESSAGE e045(zmsg_i2o_rf).
-    ENDIF.
-
-    DELETE lt_outrecords WHERE itemid = cs_rehu_hu-ritmid.
-    READ TABLE lt_outrecords INTO ls_outrecords WITH KEY docid = cs_rehu_hu-docid.
-
-    IF sy-subrc <> 0 OR ls_outrecords-itemid IS INITIAL.
-      MESSAGE e045(zmsg_i2o_rf).
-    ENDIF.
-
-    lv_new_item_id = ls_outrecords-itemid.
-
-*   move the full open quantity onto the new subitem
-    CLEAR: ls_inrecords_qty, lt_inrecords_qty, lt_outrecords_qty.
-
-    ls_inrecords_qty-docid  = cs_rehu_hu-docid.
-    ls_inrecords_qty-itemid = lv_new_item_id.
-    ls_inrecords_qty-qty    = lv_qty_screen.
-    ls_inrecords_qty-uom    = ls_item-qty-uom.
-
-    APPEND ls_inrecords_qty TO lt_inrecords_qty.
-
-    lo_dlv->/scdl/if_sp1_aspect~update(
-      EXPORTING
-        aspect       = /scdl/if_sp_c=>sc_asp_item_quantity
-        inrecords    = lt_inrecords_qty
-      IMPORTING
-        outrecords   = lt_outrecords_qty
-        rejected     = lv_rejected
-        return_codes = lt_return_code ).
-
-    IF lv_rejected = abap_true.
-      MESSAGE e045(zmsg_i2o_rf).
-    ENDIF.
-
-  ELSE.
-    lv_new_item_id = cs_rehu_hu-ritmid.
-  ENDIF.
-
-*--------------------------------------------------------------------*
-* core batch number to delivery item (the new BSP subitem, or the
-* original item if it already carried a batch)
+* core batch number to delivery item
 *--------------------------------------------------------------------*
   CLEAR: ls_inrecords_prod,
          lt_inrecords_prod,
          lt_outrecords_prod.
 
   ls_inrecords_prod-docid         = cs_rehu_hu-docid.
-  ls_inrecords_prod-itemid        = lv_new_item_id.
+  ls_inrecords_prod-itemid        = cs_rehu_hu-ritmid.
   ls_inrecords_prod-productid     = ls_item-product-productid.
   ls_inrecords_prod-productno     = ls_item-product-productno.
   ls_inrecords_prod-productno_ext = ls_item-product-productno_ext.
@@ -985,7 +896,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
             TIME ZONE lv_timezone.
 
       ls_inrecords_bbd-docid   = cs_rehu_hu-docid.
-      ls_inrecords_bbd-itemid  = lv_new_item_id.
+      ls_inrecords_bbd-itemid  = cs_rehu_hu-ritmid.
       ls_inrecords_bbd-tzonebb = lv_timezone.
       ls_inrecords_bbd-tstfrbb = lv_tstamp_bbd.
       ls_inrecords_bbd-tsttobb = lv_tstamp_bbd.
@@ -1010,43 +921,12 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Redetermine the main item and the new BSP subitem (if split), to
-* clear the blocked status now that the BSP exists - matches manual
-* Pack's own "redetermine main item and BSP" step.
+* Update 3: force redetermination so item picks up batch-derived
+* data (vendor batch / production date) from the batch master.
 *--------------------------------------------------------------------*
   CLEAR lt_item_key.
   ls_item_key-docid  = cs_rehu_hu-docid.
   ls_item_key-itemid = cs_rehu_hu-ritmid.
-  APPEND ls_item_key TO lt_item_key.
-
-  IF lv_new_item_id <> cs_rehu_hu-ritmid.
-    ls_item_key-docid  = cs_rehu_hu-docid.
-    ls_item_key-itemid = lv_new_item_id.
-    APPEND ls_item_key TO lt_item_key.
-
-    CLEAR ls_action.
-    ls_action-action_code = /scdl/if_bo_action_c=>sc_validate.
-
-    lo_dlv->execute(
-      EXPORTING
-        aspect       = /scdl/if_sp_c=>sc_asp_item
-        inkeys       = lt_item_key
-        inparam      = ls_action
-        action       = /scdl/if_sp_c=>sc_act_execute_action
-      IMPORTING
-        outrecords   = lt_outrecords
-        rejected     = lv_rejected
-        return_codes = lt_return_code ).
-
-    IF lv_rejected = abap_true.
-      MESSAGE e045(zmsg_i2o_rf).
-    ENDIF.
-
-  ENDIF.
-
-  CLEAR lt_item_key.
-  ls_item_key-docid  = cs_rehu_hu-docid.
-  ls_item_key-itemid = lv_new_item_id.
   APPEND ls_item_key TO lt_item_key.
 
   CLEAR ls_action.
@@ -1085,11 +965,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
   COMMIT WORK AND WAIT.
   CALL METHOD /scwm/cl_tm=>cleanup( ).
-
-* the batch now lives on the (possibly new) subitem - keep the RF
-* context pointing at it
-  cs_rehu_hu-ritmid   = lv_new_item_id.
-  cs_rehu_prod-ritmid = lv_new_item_id.
 
 *--------------------------------------------------------------------*
 * Stay on same RF screen
