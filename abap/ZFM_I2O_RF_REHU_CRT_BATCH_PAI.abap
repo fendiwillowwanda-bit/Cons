@@ -21,10 +21,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lc_prog       TYPE syrepid        VALUE 'SAPLZFG_I2O_RF_RECEIVING_HUS',
     lc_dynnr      TYPE sydynnr        VALUE '9015',
     lc_zbatch     TYPE /scwm/de_fcode VALUE 'ZBATCH',
-    lc_zclass     TYPE /scwm/de_fcode VALUE 'ZCLASS',
     lc_pbo2       TYPE /scwm/de_fcode VALUE 'PBO2',
-    lc_klart      TYPE klah-klart     VALUE '023',
-    lc_class      TYPE klah-class     VALUE 'BC_FERTHALB',
     lc_fld_batch  TYPE dynfnam        VALUE '/SCWM/S_RF_REHU_PROD-CHARG_VERIF',
     lc_fld_vbatch TYPE dynfnam        VALUE 'GV_VENDOR_BATCH',
     lc_fld_pddat  TYPE dynfnam        VALUE 'GV_PDDAT',
@@ -50,10 +47,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lv_batch_exists     TYPE abap_bool,
     lv_full_qty         TYPE abap_bool,
     lv_existing_msg     TYPE abap_bool,
-    lv_subrc_vb         TYPE sy-subrc,
-    lv_object           TYPE rmclf-objek,
-    lv_objtxt           TYPE maktx,
-    lv_check_external   TYPE c LENGTH 1,
     lv_date_ext         TYPE char10,
     lv_date_int         TYPE dats,
     lv_rejected         TYPE boole_d,
@@ -310,57 +303,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
   cs_rehu_prod-nista       = lv_qty_screen.
   cs_rehu_prod-nista_verif = lv_qty_screen.
-
-*--------------------------------------------------------------------*
-* Classification only
-*--------------------------------------------------------------------*
-  IF lv_fcode = lc_zclass.
-
-    IF cs_rehu_prod-matnr IS INITIAL.
-      MESSAGE e041(zmsg_i2o_rf).
-    ENDIF.
-
-    IF lv_batchno_ui IS INITIAL.
-      MESSAGE e042(zmsg_i2o_rf).
-    ENDIF.
-
-    SELECT SINGLE maktx
-      FROM makt
-      INTO @lv_objtxt
-      WHERE matnr = @lv_matnr_int
-        AND spras = @sy-langu.
-
-    lv_object = lv_matnr_int.
-
-    CALL FUNCTION 'CLFM_OBJECT_CLASSIFICATION'
-      EXPORTING
-        batch          = lv_batchno_ui
-        class          = lc_class
-        classtype      = lc_klart
-        no_display     = space
-        no_change_type = abap_true
-        no_f11         = abap_true
-        no_f8          = abap_true
-        object         = lv_object
-        objtxt         = lv_objtxt
-        status         = '2'
-        table          = 'MCH1'
-        language       = sy-langu
-        confirm_class  = abap_true
-      EXCEPTIONS
-        OTHERS         = 1.
-
-    IF sy-subrc <> 0.
-      MESSAGE e043(zmsg_i2o_rf).
-    ENDIF.
-
-    /scwm/cl_rf_bll_srvc=>set_field( space ).
-    /scwm/cl_rf_bll_srvc=>set_prmod(
-      /scwm/cl_rf_bll_srvc=>c_prmod_foreground ).
-    /scwm/cl_rf_bll_srvc=>set_fcode( lc_pbo2 ).
-
-    RETURN.
-  ENDIF.
 
 *--------------------------------------------------------------------*
 * Full qty was already batched for this item previously - block
