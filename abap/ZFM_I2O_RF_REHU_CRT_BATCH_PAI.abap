@@ -235,7 +235,14 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
   IF sy-subrc <> 0.
-    READ TABLE cs_rehu-itms INTO ls_item INDEX 1.
+    " A delivery/PO can have multiple item numbers - blindly grabbing
+    " INDEX 1 here when neither docid+itemid nor product matched would
+    " silently attach the batch to the WRONG item whenever there's more
+    " than one line. Only safe to fall back to INDEX 1 when this is
+    " genuinely the sole item on the delivery.
+    IF lines( cs_rehu-itms ) = 1.
+      READ TABLE cs_rehu-itms INTO ls_item INDEX 1.
+    ENDIF.
   ENDIF.
 
   IF sy-subrc <> 0.
@@ -362,6 +369,15 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     /scwm/cl_rf_bll_srvc=>set_fcode( lc_pbo2 ).
 
     RETURN.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Full qty was already batched for this item previously - block
+* re-processing instead of silently re-running batch creation/attach
+* against an item that's already fully assigned.
+*--------------------------------------------------------------------*
+  IF lv_full_qty = abap_true AND ls_item-product-batchno IS NOT INITIAL.
+    MESSAGE e047(zmsg_i2o_rf).
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -579,6 +595,15 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
+* Hard stop: a batch must never be created/saved without a BBD, no
+* matter which path above led here (entered, derived, or retrieved
+* from an existing batch/item).
+*--------------------------------------------------------------------*
+  IF lv_bbdat IS INITIAL.
+    MESSAGE e003(zmsg_i2o_rf).
+  ENDIF.
+
+*--------------------------------------------------------------------*
 * Create batch master only if not existing
 *
 * Scenario 1: no batch input -> program generates the batch number.
@@ -588,6 +613,19 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 * (lv_batch_exists = abap_true), no new batch is created.
 *--------------------------------------------------------------------*
   IF lv_batch_exists = abap_false.
+
+    IF lv_batchno_ui IS NOT INITIAL.
+*     Reject "random"/free-text manually-typed batch numbers for a
+*     batch that doesn't exist yet - must follow the same controlled
+*     pattern (L + 6 digits) the auto-generation itself uses
+*     (ZFM_I2O_GET_ALNUM7_SEQ, start L000000), instead of allowing any
+*     externally typed value to slip through as a "new" batch.
+      IF NOT ( lv_batchno_ui CO 'L0123456789'
+               AND strlen( lv_batchno_ui ) = 7
+               AND lv_batchno_ui(1) = 'L' ).
+        MESSAGE e048(zmsg_i2o_rf).
+      ENDIF.
+    ENDIF.
 
     IF lv_batchno_ui IS INITIAL.
 
@@ -965,6 +1003,49 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
   COMMIT WORK AND WAIT.
   CALL METHOD /scwm/cl_tm=>cleanup( ).
+
+*--------------------------------------------------------------------*
+* Safety check: this is the "full qty, no split" path - batch/BBD was
+* written directly onto cs_rehu_hu-ritmid, no BSP subitem should exist
+* for it. If one got created anyway (e.g. framework-internal
+* doc-batch-relevant determination behind the scenes), that violates
+* the FDS requirement and must surface as an error rather than be
+* silently accepted.
+*--------------------------------------------------------------------*
+  DATA: lt_items_post       TYPE /scwm/dlv_item_out_prd_tab,
+        ls_docid_query_post TYPE /scwm/dlv_docid_item_str,
+        lt_docid_query_post TYPE /scwm/dlv_docid_item_tab,
+        ls_read_opt_post    TYPE /scwm/dlv_query_contr_str,
+        lo_query_post       TYPE REF TO /scwm/cl_dlv_management_prd.
+
+  FIELD-SYMBOLS <ls_item_post> TYPE /scwm/dlv_item_out_prd_str.
+
+  CLEAR ls_docid_query_post.
+  ls_docid_query_post-docid  = cs_rehu_hu-docid.
+  ls_docid_query_post-doccat = cs_rehu_hu-rdoccat.
+  APPEND ls_docid_query_post TO lt_docid_query_post.
+  ls_read_opt_post-mix_in_object_instances = /scwm/if_dl_c=>sc_mix_in_load_instance.
+
+  CREATE OBJECT lo_query_post.
+
+  TRY.
+      CALL METHOD lo_query_post->query
+        EXPORTING
+          it_docid        = lt_docid_query_post
+          iv_whno         = cs_rehu-lgnum
+          is_read_options = ls_read_opt_post
+        IMPORTING
+          et_items        = lt_items_post.
+    CATCH /scdl/cx_delivery.
+  ENDTRY.
+
+  LOOP AT lt_items_post ASSIGNING <ls_item_post>.
+    READ TABLE <ls_item_post>-hierarchy TRANSPORTING NO FIELDS
+      WITH KEY hierarchy_type = 'BSP' parent_object = cs_rehu_hu-ritmid.
+    IF sy-subrc = 0.
+      MESSAGE e051(zmsg_i2o_rf).
+    ENDIF.
+  ENDLOOP.
 
 *--------------------------------------------------------------------*
 * Stay on same RF screen
