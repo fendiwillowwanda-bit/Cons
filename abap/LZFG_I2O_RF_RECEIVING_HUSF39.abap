@@ -244,32 +244,47 @@ FORM frm_ensure_batch_rehu
   ENDIF.
 
 *--------------------------------------------------------------------*
-* If the batch already exists, it's already attached to some item -
-* nothing further to create/split here.
+* If THIS item already carries the batch, nothing further to persist.
+* NOTE: lv_batch_exists only tells us the batch exists somewhere in
+* master data (MCH1/MCHA or via get_batch_detail) - it says nothing
+* about whether it's already attached to iv_itemid. An earlier version
+* returned here on lv_batch_exists alone, which meant that a batch
+* created (or attached to a different item) in a prior attempt never
+* got persisted onto THIS item's /scdl/db_proci_i row - so AutoPack
+* was then called against an item with a blank batch on its PRDI row.
+* Compare cs_rehu_hu-ritmid's own persisted batchno (ls_proci-batchno,
+* already fetched above) instead.
 *--------------------------------------------------------------------*
-  IF lv_batch_exists = abap_true.
+  IF lv_batch_exists = abap_true AND ls_proci-batchno = lv_batchno_ui.
     cv_batchno = lv_batchno_ui.
     cv_itemid  = iv_itemid.
     RETURN.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Create the batch via the standard mechanism (same as manual Pack)
+* Create the batch via the standard mechanism (same as manual Pack) -
+* only if it doesn't already exist in master data. If it already
+* exists, skip creation but still fall through below to attach it to
+* this item.
 *--------------------------------------------------------------------*
-  CALL FUNCTION '/SCWM/RF_REHU_CRBA'
-    EXPORTING
-      cv_matid    = lv_matid
-      cv_matnr    = iv_matnr_int
-      cv_batch    = lv_batchno_ui
-      iv_lgnum    = iv_lgnum
-      iv_entitled = iv_entitled
-    IMPORTING
-      ev_batchid  = lv_new_batchid
-      eo_batch    = lo_batch.
+  IF lv_batch_exists = abap_false.
 
-  IF lo_batch IS NOT BOUND OR lv_new_batchid IS INITIAL.
-    cv_rejected = abap_true.
-    RETURN.
+    CALL FUNCTION '/SCWM/RF_REHU_CRBA'
+      EXPORTING
+        cv_matid    = lv_matid
+        cv_matnr    = iv_matnr_int
+        cv_batch    = lv_batchno_ui
+        iv_lgnum    = iv_lgnum
+        iv_entitled = iv_entitled
+      IMPORTING
+        ev_batchid  = lv_new_batchid
+        eo_batch    = lo_batch.
+
+    IF lo_batch IS NOT BOUND OR lv_new_batchid IS INITIAL.
+      cv_rejected = abap_true.
+      RETURN.
+    ENDIF.
+
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -373,32 +388,39 @@ FORM frm_ensure_batch_rehu
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Valuate and save the batch object itself, against the same item.
+* Valuate and save the batch object itself, against the same item -
+* only relevant when we just created it above; a pre-existing batch
+* has no lo_batch reference here (skipped RF_REHU_CRBA) and is already
+* valuated/saved from whenever it was originally created.
 *--------------------------------------------------------------------*
-  lo_bom = /scdl/cl_bo_management=>get_instance( ).
-  lo_bo  = lo_bom->get_bo_by_id( iv_docid ).
-  lo_item ?= lo_bo->get_item( iv_itemid ).
+  IF lo_batch IS BOUND.
 
-  TRY.
-      IF lo_batch->mo_valuat_mng IS BOUND.
-        /scwm/cl_dlv_batch_internal=>item_batch_valuate(
-          iv_lgnum = iv_lgnum
-          io_item  = lo_item
-          io_batch = lo_batch ).
-      ENDIF.
-    CATCH /scwm/cx_dlv_batch /scwm/cx_dlv_chval.
-  ENDTRY.
+    lo_bom = /scdl/cl_bo_management=>get_instance( ).
+    lo_bo  = lo_bom->get_bo_by_id( iv_docid ).
+    lo_item ?= lo_bo->get_item( iv_itemid ).
 
-  TRY.
-      lo_batch->before_save( ).
-    CATCH /scwm/cx_batch_management.
-      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
-      CALL METHOD /scwm/cl_tm=>cleanup( ).
-      cv_rejected = abap_true.
-      RETURN.
-  ENDTRY.
+    TRY.
+        IF lo_batch->mo_valuat_mng IS BOUND.
+          /scwm/cl_dlv_batch_internal=>item_batch_valuate(
+            iv_lgnum = iv_lgnum
+            io_item  = lo_item
+            io_batch = lo_batch ).
+        ENDIF.
+      CATCH /scwm/cx_dlv_batch /scwm/cx_dlv_chval.
+    ENDTRY.
 
-  /scwm/cl_batch_appl=>save( ).
+    TRY.
+        lo_batch->before_save( ).
+      CATCH /scwm/cx_batch_management.
+        CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+        CALL METHOD /scwm/cl_tm=>cleanup( ).
+        cv_rejected = abap_true.
+        RETURN.
+    ENDTRY.
+
+    /scwm/cl_batch_appl=>save( ).
+
+  ENDIF.
 
 *--------------------------------------------------------------------*
 * Redetermine so the item picks up batch-derived data.
