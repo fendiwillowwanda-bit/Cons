@@ -708,6 +708,52 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   CREATE OBJECT lo_dlv.
 
 *--------------------------------------------------------------------*
+* Valuate and save the batch application object itself BEFORE it is
+* referenced by batchno below - only relevant for a batch we just
+* created above (lo_batch bound); an existing batch
+* (lv_batch_exists = abap_true) is already valuated/saved from
+* whenever it was first created.
+*
+* Must run BEFORE the item_product update further down: a brand new
+* batch only exists in memory (lo_batch) until /scwm/cl_batch_appl=>
+* save() persists it - confirmed live via debugger that referencing
+* the batchno on the item via aspect~update() before the batch itself
+* is saved silently drops the batchno (item_product update() returns
+* success/no rejection, but LT_OUTRECORDS_PROD-BATCHNO comes back
+* blank, since the framework can't resolve a batch that doesn't exist
+* in the database yet).
+*--------------------------------------------------------------------*
+  IF lo_batch IS BOUND.
+
+    lo_bom = /scdl/cl_bo_management=>get_instance( ).
+    lo_bo  = lo_bom->get_bo_by_id( cs_rehu_hu-docid ).
+    lo_item ?= lo_bo->get_item( cs_rehu_hu-ritmid ).
+
+    TRY.
+        IF lo_batch->mo_valuat_mng IS BOUND.
+          /scwm/cl_dlv_batch_internal=>item_batch_valuate(
+            iv_lgnum = cs_rehu-lgnum
+            io_item  = lo_item
+            io_batch = lo_batch ).
+        ENDIF.
+      CATCH /scwm/cx_dlv_batch /scwm/cx_dlv_chval.
+        MESSAGE e008(/scwm/batch).
+    ENDTRY.
+
+    TRY.
+        lo_batch->before_save( ).
+      CATCH /scwm/cx_batch_management.
+        MESSAGE ID     sy-msgid
+                TYPE   sy-msgty
+                NUMBER sy-msgno
+                WITH   sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDTRY.
+
+    /scwm/cl_batch_appl=>save( ).
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
 * core batch number to delivery item
 *--------------------------------------------------------------------*
   CLEAR: ls_inrecords_prod,
@@ -821,42 +867,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
       ENDIF.
 
     ENDIF.
-
-  ENDIF.
-
-*--------------------------------------------------------------------*
-* Valuate and save the batch application object itself, against the
-* same item - only relevant for a batch we just created above
-* (lo_batch bound); an existing batch (lv_batch_exists = abap_true) is
-* already valuated/saved from whenever it was first created.
-*--------------------------------------------------------------------*
-  IF lo_batch IS BOUND.
-
-    lo_bom = /scdl/cl_bo_management=>get_instance( ).
-    lo_bo  = lo_bom->get_bo_by_id( cs_rehu_hu-docid ).
-    lo_item ?= lo_bo->get_item( cs_rehu_hu-ritmid ).
-
-    TRY.
-        IF lo_batch->mo_valuat_mng IS BOUND.
-          /scwm/cl_dlv_batch_internal=>item_batch_valuate(
-            iv_lgnum = cs_rehu-lgnum
-            io_item  = lo_item
-            io_batch = lo_batch ).
-        ENDIF.
-      CATCH /scwm/cx_dlv_batch /scwm/cx_dlv_chval.
-        MESSAGE e008(/scwm/batch).
-    ENDTRY.
-
-    TRY.
-        lo_batch->before_save( ).
-      CATCH /scwm/cx_batch_management.
-        MESSAGE ID     sy-msgid
-                TYPE   sy-msgty
-                NUMBER sy-msgno
-                WITH   sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
-    ENDTRY.
-
-    /scwm/cl_batch_appl=>save( ).
 
   ENDIF.
 
