@@ -147,7 +147,6 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
         lv_plant         TYPE c LENGTH 4,
         lv_xchpf         TYPE marc-xchpf,
         lv_xchpf_found   TYPE abap_bool,
-        lv_matnr_for_batch TYPE matnr,
         lv_batch_rejected  TYPE abap_bool,
         lv_itemid_after_batch TYPE /scdl/dl_itemid.
 
@@ -214,18 +213,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
 
   " Remember whether the item ALREADY had a batch persisted on it
   " (priority 1/2/3 lookup above) before the screen-value fallback
-  " below can fill lv_batch_db in from the RF screen instead. That
-  " fallback used to also skip the whole frm_ensure_batch_rehu block
-  " further down (since it made lv_batch_db non-initial), meaning a
-  " batch typed on screen but never actually split/attached onto this
-  " item (e.g. left over from an earlier attempt, or just typed and
-  " not yet saved) was accepted as-is without ever creating the proper
-  " BSP subitem - confirmed live via debugger: frm_ensure_batch_rehu
-  " was never reached, and /SCWM/HU_AUTOPACK_IBDLV then failed with
-  " "Could not find the item to pack". Gate on lv_batch_persisted
-  " instead so frm_ensure_batch_rehu still runs in that case - its own
-  " existence check safely no-ops (just returns the item as-is) if the
-  " batch turns out to already be properly attached.
+  " below can fill lv_batch_db in from the RF screen instead.
   DATA(lv_batch_persisted) = xsdbool( lv_batch_db IS NOT INITIAL ).
 
   " The persisted delivery item's batch (lv_batch_db) can still be blank
@@ -263,49 +251,19 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
     ENDIF.
 
     IF lv_xchpf = abap_true.
-      " Batch-managed and no batch persisted yet: create/assign it
-      " ourselves as Auto Pack's first priority action (FDS: "Batch
-      " creation is done on first priority upon auto pack"), instead
-      " of requiring F3 Batch to have already been pressed and saved.
-      lv_matnr_for_batch = lv_prod_db.
-
-      CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
-        EXPORTING
-          input  = lv_matnr_for_batch
-        IMPORTING
-          output = lv_matnr_for_batch.
-
+      " Batch-managed material: batch/BBD/prod date/vendor batch are
+      " already persisted to PRDI by F3 Batch beforehand - AutoPack no
+      " longer creates or saves a batch itself, it only requires one
+      " to already exist on this item.
       CLEAR: lv_batch_rejected, lv_itemid_after_batch.
-
-      PERFORM frm_ensure_batch_rehu
-        USING    lv_lgnum
-                 lv_docid
-                 lv_itemid
-                 lv_matnr_for_batch
-                 lv_plant
-                 lv_entitled_db
-                 lv_qty
-                 lv_uom
-        CHANGING lv_batch_db
-                 lv_itemid_after_batch
-                 lv_batch_rejected.
 
       IF lv_batch_rejected = abap_true OR lv_batch_db IS INITIAL.
         " Surface the same standard "Product subject to batch
         " management requirement" message F1 Pack itself would show
-        " here, instead of the generic e029, so the user sees a
-        " familiar, specific reason (batch-managed material, batch
-        " could not be created/assigned - e.g. missing BBD) rather than
-        " a vague rejection.
+        " here, so the user sees a familiar, specific reason (batch-
+        " managed material with no batch saved yet via F3 Batch)
+        " rather than a vague rejection.
         MESSAGE e395(/scwm/rf_en) WITH lv_prod_db RAISING error.
-      ENDIF.
-
-      " The batch now lives on a NEW batch-split (BSP) subitem, not the
-      " original item that was scanned - everything downstream (HU
-      " lock/init, AutoPack item build) must operate against that new
-      " item, or /SCWM/HU_AUTOPACK_IBDLV can't find/construct against it.
-      IF lv_itemid_after_batch IS NOT INITIAL.
-        lv_itemid = lv_itemid_after_batch.
       ENDIF.
 
     ENDIF.
@@ -365,8 +323,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
   " LV_BATCH_INIT = 'X'; forcing past it completed AutoPack correctly).
   " The FDS requirement ("error if material is batch managed and no
   " batch created") is about the item being packed, which is already
-  " guaranteed above via frm_ensure_batch_rehu + e029/e059 before we
-  " ever reach lo_pack->init( ) - so gating on this document-wide flag
+  " guaranteed above via the xchpf/lv_batch_db check + e395/e059 before
+  " we ever reach lo_pack->init( ) - so gating on this document-wide flag
   " only produces false positives from unrelated sibling items on the
   " same delivery that haven't been batched/packed yet.
 
