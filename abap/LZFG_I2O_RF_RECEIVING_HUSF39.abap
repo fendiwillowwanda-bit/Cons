@@ -81,8 +81,6 @@ FORM frm_ensure_batch_rehu
         lo_bom         TYPE REF TO /scdl/cl_bo_management,
         lo_bo          TYPE REF TO /scdl/if_bo,
         lo_item        TYPE REF TO /scdl/cl_dl_item_write,
-        lt_k_item      TYPE /scdl/t_sp_k_item,
-        ls_k_item      TYPE /scdl/s_sp_k_item,
         lt_return_code TYPE /scdl/t_sp_return_code,
         lv_rejected    TYPE boole_d,
         lv_timezone    TYPE tznzone,
@@ -294,24 +292,16 @@ FORM frm_ensure_batch_rehu
 
   CREATE OBJECT lo_dlv.
 
-  CLEAR lt_k_item.
-  ls_k_item-docid  = iv_docid.
-  ls_k_item-itemid = iv_itemid.
-  APPEND ls_k_item TO lt_k_item.
-
-  lo_dlv->lock(
-    EXPORTING
-      inkeys       = lt_k_item
-      lockmode     = /scdl/if_sp1_locking=>sc_exclusive_lock
-      aspect       = /scdl/if_sp_c=>sc_asp_item
-    IMPORTING
-      rejected     = lv_rejected
-      return_codes = lt_return_code ).
-
-  IF lv_rejected = abap_true.
-    cv_rejected = abap_true.
-    RETURN.
-  ENDIF.
+  " This explicit lo_dlv->lock( ) call was rejecting consistently here
+  " too, for the same reason it had to be removed from the F3 Batch
+  " handler (ZFM_I2O_RF_REHU_CRT_BATCH_PAI): it conflicts with the lock
+  " the RF transaction/session already holds on this delivery just by
+  " having it open - not an actual competing session. The update( )/
+  " execute( )/save( ) calls below each carry out their own rejected
+  " check already, and the standard SCDL save( ) framework performs
+  " its own locking internally as part of persisting the document, so
+  " this redundant upfront lock isn't needed to protect data integrity
+  " here either.
 
   CLEAR: ls_inrecords_prod, lt_inrecords_prod, lt_outrecords_prod.
 
