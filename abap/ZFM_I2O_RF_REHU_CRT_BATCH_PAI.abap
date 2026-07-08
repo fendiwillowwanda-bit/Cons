@@ -104,6 +104,14 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     ls_read_opt_pre    TYPE /scwm/dlv_query_contr_str,
     lt_items_pre       TYPE /scwm/dlv_item_out_prd_tab.
 
+  DATA:
+    lo_batch       TYPE REF TO /scwm/cl_batch_appl,
+    lo_bo          TYPE REF TO /scdl/if_bo,
+    lo_bom         TYPE REF TO /scdl/cl_bo_management,
+    lo_item        TYPE REF TO /scdl/cl_dl_item_write,
+    lv_matid       TYPE /scwm/de_matid,
+    lv_new_batchid TYPE /scwm/de_batchid.
+
   FIELD-SYMBOLS:
     <ls_rehu_prod> TYPE /scwm/s_rf_rehu_prod.
 
@@ -198,24 +206,12 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     ENDIF.
   ENDIF.
 
-*--------------------------------------------------------------------*
-* From here on, only ZBATCH / ZCLASS fcodes continue processing.
-*--------------------------------------------------------------------*
-  IF lv_fcode <> lc_zbatch
-     AND lv_fcode <> lc_zclass.
+  IF lv_fcode <> lc_zbatch.
     RETURN.
   ENDIF.
 
 *--------------------------------------------------------------------*
 * Get current delivery item context
-*
-* cs_rehu_hu-docid/ritmid may not be populated yet at this point in
-* the transaction (e.g. product typed + Enter, then straight to F3
-* Batch with no separate "select item" step) - falling straight
-* through to "READ ... INDEX 1" in that case grabs whatever item
-* happens to be first in cs_rehu-itms, regardless of which product
-* was actually entered on screen. Try matching by the entered product
-* first, before resorting to that blind index-1 fallback.
 *--------------------------------------------------------------------*
   READ TABLE cs_rehu-itms INTO ls_item
     WITH KEY docid  = cs_rehu_hu-docid
@@ -235,11 +231,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
   IF sy-subrc <> 0.
-    " A delivery/PO can have multiple item numbers - blindly grabbing
-    " INDEX 1 here when neither docid+itemid nor product matched would
-    " silently attach the batch to the WRONG item whenever there's more
-    " than one line. Only safe to fall back to INDEX 1 when this is
-    " genuinely the sole item on the delivery.
     IF lines( cs_rehu-itms ) = 1.
       READ TABLE cs_rehu-itms INTO ls_item INDEX 1.
     ENDIF.
@@ -373,11 +364,10 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
 *--------------------------------------------------------------------*
 * Full qty was already batched for this item previously - block
-* re-processing instead of silently re-running batch creation/attach
-* against an item that's already fully assigned.
+* re-processing.
 *--------------------------------------------------------------------*
   IF lv_full_qty = abap_true AND ls_item-product-batchno IS NOT INITIAL.
-    MESSAGE e047(zmsg_i2o_rf).
+    MESSAGE e066(zmsg_i2o_rf).
   ENDIF.
 
 *--------------------------------------------------------------------*
@@ -420,11 +410,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
 *--------------------------------------------------------------------*
 * Check existing batch and retrieve BBD / ProdDate / Vendor Batch
-*
-* Scenario 2 & 5: batch entered already exists -> BBD/ProdDate/Vendor
-* Batch retrieved from batch master, batch creation must NOT run.
-* Scenario 4: batch entered but does not exist -> falls through to
-* creation using this externally entered batch number.
 *--------------------------------------------------------------------*
   CLEAR: lv_batch_exists,
          lv_mch_bbdat,
@@ -611,19 +596,25 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 * externally entered number.
 * Scenario 2: batch entered, exists -> this block is SKIPPED
 * (lv_batch_exists = abap_true), no new batch is created.
+*
+* Uses /SCWM/RF_REHU_CRBA (the same standard FM the manual Pack flow
+* uses) instead of a bare VB_CREATE_BATCH: VB_CREATE_BATCH only writes
+* the classic flat MCHA-VFDAT field - it never registers the batch
+* with the EWM batch application object, so the BBD never lands in
+* the EWM batch valuation/classification data (characteristic
+* LOBM_VFDAT) that RF screens, AutoPack, and Pack actually read from.
+* That's why the BBD looked "not saved in the batch" even though the
+* batch itself was created and MCHA-VFDAT was set. RF_REHU_CRBA
+* returns the EWM batch application object (lo_batch), which we then
+* valuate and save properly below.
 *--------------------------------------------------------------------*
   IF lv_batch_exists = abap_false.
 
     IF lv_batchno_ui IS NOT INITIAL.
-*     Reject "random"/free-text manually-typed batch numbers for a
-*     batch that doesn't exist yet - must follow the same controlled
-*     pattern (L + 6 digits) the auto-generation itself uses
-*     (ZFM_I2O_GET_ALNUM7_SEQ, start L000000), instead of allowing any
-*     externally typed value to slip through as a "new" batch.
       IF NOT ( lv_batchno_ui CO 'L0123456789'
                AND strlen( lv_batchno_ui ) = 7
                AND lv_batchno_ui(1) = 'L' ).
-        MESSAGE e048(zmsg_i2o_rf).
+        MESSAGE e065(zmsg_i2o_rf).
       ENDIF.
     ENDIF.
 
@@ -661,90 +652,22 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
     ENDIF.
 
-    CLEAR lv_check_external.
-    IF lv_batchno_ui IS NOT INITIAL.
-      lv_check_external = abap_true.
-    ENDIF.
+    lv_matid = cs_rehu_prod-matid.
 
-    CLEAR ls_mcha.
-    ls_mcha-matnr = lv_matnr_int.
-    ls_mcha-werks = lv_werks.
-    ls_mcha-charg = lv_batchno_ui.
-    ls_mcha-licha = lv_vendor_batch.
-    ls_mcha-hsdat = lv_pddat.
-    ls_mcha-vfdat = lv_bbdat.
-
-    CALL FUNCTION 'VB_CREATE_BATCH'
+    CALL FUNCTION '/SCWM/RF_REHU_CRBA'
       EXPORTING
-        ymcha                        = ls_mcha
-        no_change_document           = space
-        check_external               = lv_check_external
-        check_customer               = 'X'
+        cv_matid    = lv_matid
+        cv_matnr    = lv_matnr_int
+        cv_batch    = lv_batchno_ui
+        iv_lgnum    = cs_rehu-lgnum
+        iv_entitled = lv_entitled
       IMPORTING
-        ymcha                        = ls_mcha
-      TABLES
-        new_batch                    = lt_new_batch
-        return                       = lt_return
-      EXCEPTIONS
-        no_material                  = 1
-        no_batch                     = 2
-        no_plant                     = 3
-        material_not_found           = 4
-        plant_not_found              = 5
-        stoloc_not_found             = 6
-        lock_on_material             = 7
-        lock_on_plant                = 8
-        lock_on_batch                = 9
-        lock_system_error            = 10
-        no_authority                 = 11
-        batch_exist                  = 12
-        stoloc_exist                 = 13
-        illegal_batch_number         = 14
-        no_batch_handling            = 15
-        no_valuation_area            = 16
-        valuation_type_not_found     = 17
-        no_valuation_found           = 18
-        error_automatic_batch_number = 19
-        cancelled                    = 20
-        wrong_status                 = 21
-        interval_not_found           = 22
-        number_range_not_extern      = 23
-        object_not_found             = 24
-        error_check_batch_number     = 25
-        no_external_number           = 26
-        no_customer_number           = 27
-        no_class                     = 28
-        error_in_classification      = 29
-        inconsistency_in_key         = 30
-        region_of_origin_not_found   = 31
-        country_of_origin_not_found  = 32
-        vendor_error                 = 33
-        OTHERS                       = 34.
+        ev_batchid  = lv_new_batchid
+        eo_batch    = lo_batch.
 
-    lv_subrc_vb = sy-subrc.
-
-    IF lv_subrc_vb <> 0.
-      CASE lv_subrc_vb.
-        WHEN 12.
-          MESSAGE e006(zmsg_i2o_rf).
-        WHEN 14.
-          MESSAGE e007(zmsg_i2o_rf).
-        WHEN 15.
-          MESSAGE e002(zmsg_i2o_rf).
-        WHEN 25.
-          MESSAGE e008(zmsg_i2o_rf).
-        WHEN OTHERS.
-          READ TABLE lt_return INTO ls_return WITH KEY type = 'E'.
-          IF sy-subrc = 0 AND ls_return-message IS NOT INITIAL.
-            MESSAGE e016(zmsg_i2o_rf) WITH ls_return-message.
-          ELSE.
-            MESSAGE e016(zmsg_i2o_rf) WITH |VB_CREATE_BATCH FAILED SUBRC { lv_subrc_vb }|.
-          ENDIF.
-      ENDCASE.
+    IF lo_batch IS NOT BOUND OR lv_new_batchid IS INITIAL.
+      MESSAGE e894(/scwm/rf_en) WITH lv_batchno_ui lv_matnr_int.
     ENDIF.
-
-    COMMIT WORK AND WAIT.
-    lv_batchno_ui = ls_mcha-charg.
 
   ENDIF.
 
@@ -816,13 +739,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     EXCEPTIONS
       OTHERS     = 1.
 
-*--------------------------------------------------------------------*
-* Full qty AND partial qty: assign batch/BBD directly to the SAME
-* item, no split/subitem - the actual split into a new BSP subitem
-* for partial receiving is left entirely to F1 Pack, same as before.
-* F3 Batch's job is only to make sure batch/BBD/prod date/vendor batch
-* are persisted to the delivery item either way.
-*--------------------------------------------------------------------*
   /scwm/cl_tm=>set_lgnum( cs_rehu-lgnum ).
 
   CREATE OBJECT lo_query_pre.
@@ -850,15 +766,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
   CREATE OBJECT lo_dlv.
 
-  " This explicit lo_dlv->lock( ) call was rejecting consistently across
-  " different items and after clearing all stale SM12 entries, meaning
-  " it conflicts with locking the RF transaction/session already holds
-  " on this delivery just by having it open for processing - not an
-  " actual competing session. The calls below (update( )/execute( )/
-  " save( )) each carry out their own rejected check already and the
-  " standard SCDL save( ) framework performs its own locking internally
-  " as part of persisting the document, so this redundant upfront lock
-  " isn't needed to protect data integrity here.
 *--------------------------------------------------------------------*
 * core batch number to delivery item
 *--------------------------------------------------------------------*
@@ -943,7 +850,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Update 3: force redetermination so item picks up batch-derived
+* Force redetermination so item picks up batch-derived
 * data (vendor batch / production date) from the batch master.
 *--------------------------------------------------------------------*
   CLEAR lt_item_key.
@@ -969,6 +876,42 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     MESSAGE e045(zmsg_i2o_rf).
   ENDIF.
 
+*--------------------------------------------------------------------*
+* Valuate and save the batch application object itself, against the
+* same item - only relevant for a batch we just created above
+* (lo_batch bound); an existing batch (lv_batch_exists = abap_true) is
+* already valuated/saved from whenever it was first created.
+*--------------------------------------------------------------------*
+  IF lo_batch IS BOUND.
+
+    lo_bom = /scdl/cl_bo_management=>get_instance( ).
+    lo_bo  = lo_bom->get_bo_by_id( cs_rehu_hu-docid ).
+    lo_item ?= lo_bo->get_item( cs_rehu_hu-ritmid ).
+
+    TRY.
+        IF lo_batch->mo_valuat_mng IS BOUND.
+          /scwm/cl_dlv_batch_internal=>item_batch_valuate(
+            iv_lgnum = cs_rehu-lgnum
+            io_item  = lo_item
+            io_batch = lo_batch ).
+        ENDIF.
+      CATCH /scwm/cx_dlv_batch /scwm/cx_dlv_chval.
+        MESSAGE e008(/scwm/batch).
+    ENDTRY.
+
+    TRY.
+        lo_batch->before_save( ).
+      CATCH /scwm/cx_batch_management.
+        MESSAGE ID     sy-msgid
+                TYPE   sy-msgty
+                NUMBER sy-msgno
+                WITH   sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDTRY.
+
+    /scwm/cl_batch_appl=>save( ).
+
+  ENDIF.
+
   lo_dlv->/scdl/if_sp1_transaction~before_save(
     IMPORTING
       rejected = lv_rejected ).
@@ -988,15 +931,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   COMMIT WORK AND WAIT.
   CALL METHOD /scwm/cl_tm=>cleanup( ).
 
-*--------------------------------------------------------------------*
-* Safety check: F3 Batch never splits (full or partial qty alike) -
-* batch/BBD was written directly onto cs_rehu_hu-ritmid, no BSP
-* subitem should exist for it yet. If one got created anyway (e.g.
-* framework-internal doc-batch-relevant determination behind the
-* scenes), that must surface as an error rather than be silently
-* accepted - the actual split for partial qty is F1 Pack's job, not
-* something that should happen here.
-*--------------------------------------------------------------------*
   DATA: lt_items_post       TYPE /scwm/dlv_item_out_prd_tab,
         ls_docid_query_post TYPE /scwm/dlv_docid_item_str,
         lt_docid_query_post TYPE /scwm/dlv_docid_item_tab,
@@ -1028,7 +962,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     READ TABLE <ls_item_post>-hierarchy TRANSPORTING NO FIELDS
       WITH KEY hierarchy_type = 'BSP' parent_object = cs_rehu_hu-ritmid.
     IF sy-subrc = 0.
-      MESSAGE e051(zmsg_i2o_rf).
+      MESSAGE e067(zmsg_i2o_rf).
     ENDIF.
   ENDLOOP.
 
@@ -1045,5 +979,326 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ELSE.
     MESSAGE s050(zmsg_i2o_rf).
   ENDIF.
+
+ENDFUNCTION.
+
+FUNCTION zfm_i2o_rf_rehu_crt_batch_pbo.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  CHANGING
+*"     REFERENCE(CS_REHU_HU) TYPE  /SCWM/S_RF_REHU_HU
+*"     REFERENCE(CT_REHU_HU) TYPE  /SCWM/TT_RF_REHU_HU
+*"     REFERENCE(CS_REHU) TYPE  /SCWM/S_RF_ADMIN_REHU
+*"     REFERENCE(CS_REHU_PROD) TYPE  /SCWM/S_RF_REHU_PROD
+*"     REFERENCE(CT_REHU_PROD) TYPE  /SCWM/TT_RF_REHU_PROD
+*"----------------------------------------------------------------------
+  TYPES: BEGIN OF ty_mara_shelf,
+           xchpf TYPE mara-xchpf,
+           mhdhb TYPE mara-mhdhb,
+           iprkz TYPE mara-iprkz,
+         END OF ty_mara_shelf.
+
+  CONSTANTS:
+    lc_prog       TYPE syrepid VALUE 'SAPLZFG_I2O_RF_RECEIVING_HUS',
+    lc_dynnr      TYPE sydynnr VALUE '9015',
+    lc_fld_matnr  TYPE dynfnam VALUE '/SCWM/S_RF_REHU_PROD-MATNR_VERIF',
+    lc_fld_batch  TYPE dynfnam VALUE '/SCWM/S_RF_REHU_PROD-CHARG_VERIF',
+    lc_fld_maktx  TYPE dynfnam VALUE '/SCWM/S_RF_REHU_PROD-MAKTX',
+    lc_fld_altme  TYPE dynfnam VALUE '/SCWM/S_RF_REHU_PROD-ALTME',
+    lc_fld_vbatch TYPE dynfnam VALUE 'GV_VENDOR_BATCH',
+    lc_fld_pddat  TYPE dynfnam VALUE 'GV_PDDAT',
+    lc_fld_bbdat  TYPE dynfnam VALUE 'GV_BBDAT'.
+
+  DATA:
+    lt_dynp        TYPE STANDARD TABLE OF dynpread,
+    ls_dynp        TYPE dynpread,
+    lv_matnr_int   TYPE matnr,
+    lv_charg_verif TYPE /scwm/de_charg_verif,
+    lv_bbdat_ext   TYPE char10,
+    lv_pddat_ext   TYPE char10,
+    ls_item        TYPE /scwm/dlv_item_out_prd_str,
+    ls_mara_shelf  TYPE ty_mara_shelf.
+
+  STATICS: sv_last_docid  TYPE /scwm/de_docid,
+           sv_last_ritmid TYPE /scdl/dl_itemid.
+
+  BREAK-POINT ID /scwm/rf_receiving_hus.
+
+*--------------------------------------------------------------------*
+* RF screens carry gv_bbdat/gv_pddat/gv_vendor_batch as function-group
+* globals so they survive across the several PBO/PAI round-trips of
+* the SAME item's batch entry - but nothing was ever clearing them
+* when the user moves on to a genuinely DIFFERENT item, so stale
+* BBD/ProdDate/Vendor Batch from a PREVIOUS item silently carried over
+* and got reused for the next one. Clear them the moment the item
+* actually changes.
+*--------------------------------------------------------------------*
+  IF cs_rehu_hu-docid  <> sv_last_docid
+  OR cs_rehu_hu-ritmid <> sv_last_ritmid.
+
+    CLEAR: gv_bbdat, gv_pddat, gv_vendor_batch.
+
+    sv_last_docid  = cs_rehu_hu-docid.
+    sv_last_ritmid = cs_rehu_hu-ritmid.
+
+  ENDIF.
+
+  /scwm/cl_rf_bll_srvc=>init_screen_param( ).
+
+  /scwm/cl_rf_bll_srvc=>set_screen_param(
+    EXPORTING iv_param_name = gc_param_cs_rehu_hu ).
+
+  /scwm/cl_rf_bll_srvc=>set_screen_param(
+    EXPORTING iv_param_name = gc_param_cs_rehu_prod ).
+
+  /scwm/cl_rf_bll_srvc=>set_screlm_required_off(
+    '/SCWM/S_RF_REHU_PROD-NISTA_VERIF' ).
+
+  /scwm/cl_rf_bll_srvc=>set_screlm_required_off(
+    '/SCWM/S_RF_REHU_PROD-CHARG_VERIF' ).
+
+*--------------------------------------------------------------------*
+* Read product directly from RF screen
+*--------------------------------------------------------------------*
+  CLEAR lt_dynp.
+
+  APPEND VALUE #( fieldname = lc_fld_matnr ) TO lt_dynp.
+
+  CALL FUNCTION 'DYNP_VALUES_READ'
+    EXPORTING
+      dyname             = lc_prog
+      dynumb             = lc_dynnr
+      translate_to_upper = abap_true
+    TABLES
+      dynpfields         = lt_dynp
+    EXCEPTIONS
+      OTHERS             = 1.
+
+  READ TABLE lt_dynp INTO ls_dynp WITH KEY fieldname = lc_fld_matnr.
+  IF sy-subrc = 0 AND ls_dynp-fieldvalue IS NOT INITIAL.
+    cs_rehu_prod-matnr_verif = ls_dynp-fieldvalue.
+    cs_rehu_prod-matnr       = ls_dynp-fieldvalue.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Fill product description and UoM after product entry
+*--------------------------------------------------------------------*
+  IF cs_rehu_prod-matnr IS NOT INITIAL.
+
+    CALL FUNCTION 'CONVERSION_EXIT_MATN1_INPUT'
+      EXPORTING
+        input  = cs_rehu_prod-matnr
+      IMPORTING
+        output = lv_matnr_int.
+
+    IF lv_matnr_int IS INITIAL.
+      lv_matnr_int = cs_rehu_prod-matnr.
+    ENDIF.
+
+    SELECT SINGLE maktx
+      FROM makt
+      INTO @cs_rehu_prod-maktx
+      WHERE matnr = @lv_matnr_int
+        AND spras = @sy-langu.
+
+    READ TABLE cs_rehu-itms INTO ls_item
+      WITH KEY product-productno = cs_rehu_prod-matnr
+               product-batchno   = space.
+
+    IF sy-subrc <> 0.
+      READ TABLE cs_rehu-itms INTO ls_item
+        WITH KEY product-productno = lv_matnr_int
+                 product-batchno   = space.
+    ENDIF.
+
+    IF sy-subrc <> 0.
+      READ TABLE cs_rehu-itms INTO ls_item
+        WITH KEY product-batchno = space.
+    ENDIF.
+
+    IF sy-subrc = 0.
+      cs_rehu_prod-matid = ls_item-product-productid.
+      cs_rehu_prod-altme = ls_item-qty-uom.
+
+      IF cs_rehu_prod-nista IS INITIAL.
+        cs_rehu_prod-nista = ls_item-qty-qty.
+      ENDIF.
+
+      IF cs_rehu_prod-nista_verif IS INITIAL.
+        cs_rehu_prod-nista_verif = cs_rehu_prod-nista.
+      ENDIF.
+    ENDIF.
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Keep global values in RF context
+*--------------------------------------------------------------------*
+  IF gv_bbdat IS NOT INITIAL.
+    cs_rehu_prod-bbdat = gv_bbdat.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Scenario 3 - No batch entered, but production date entered ->
+* auto-compute BBD from material master total shelf life
+*--------------------------------------------------------------------*
+  IF gv_pddat IS NOT INITIAL
+     AND gv_bbdat IS INITIAL
+     AND cs_rehu_prod-bbdat IS INITIAL
+     AND cs_rehu_prod-charg IS INITIAL
+     AND cs_rehu_prod-charg_verif IS INITIAL
+     AND cs_rehu_prod-matid IS NOT INITIAL.
+
+    DATA: ls_mat_global_pbo TYPE /scwm/s_material_global,
+          ls_mat_lgnum_pbo  TYPE /scwm/s_material_lgnum.
+
+    CLEAR: ls_mat_global_pbo, ls_mat_lgnum_pbo, ls_mara_shelf.
+
+    TRY.
+        CALL FUNCTION '/SCWM/MATERIAL_READ_SINGLE'
+          EXPORTING
+            iv_matid      = cs_rehu_prod-matid
+            iv_lgnum      = cs_rehu-lgnum
+          IMPORTING
+            es_mat_global = ls_mat_global_pbo
+            es_mat_lgnum  = ls_mat_lgnum_pbo.
+      CATCH /scwm/cx_md.
+    ENDTRY.
+
+*   Fallback
+    IF ls_mat_global_pbo-matnr IS NOT INITIAL.
+      SELECT SINGLE xchpf, mhdhb, iprkz
+        FROM mara
+        INTO (@ls_mara_shelf-xchpf,
+              @ls_mara_shelf-mhdhb,
+              @ls_mara_shelf-iprkz)
+        WHERE matnr = @ls_mat_global_pbo-matnr.
+    ENDIF.
+
+    IF ls_mara_shelf-xchpf IS NOT INITIAL.
+
+      IF ls_mara_shelf-mhdhb IS INITIAL.
+        MESSAGE e004(zmsg_i2o_rf).
+*       "MATERIAL SHELF LIFE MISSING"
+      ENDIF.
+
+      CASE ls_mara_shelf-iprkz.
+        WHEN 'D' OR space.
+          gv_bbdat = gv_pddat + ls_mara_shelf-mhdhb.
+        WHEN 'W'.
+          gv_bbdat = gv_pddat + ( ls_mara_shelf-mhdhb * 7 ).
+        WHEN 'M'.
+          CALL FUNCTION 'RP_CALC_DATE_IN_INTERVAL'
+            EXPORTING
+              date      = gv_pddat
+              days      = 0
+              months    = ls_mara_shelf-mhdhb
+              years     = 0
+              signum    = '+'
+            IMPORTING
+              calc_date = gv_bbdat.
+        WHEN 'Y'.
+          CALL FUNCTION 'RP_CALC_DATE_IN_INTERVAL'
+            EXPORTING
+              date      = gv_pddat
+              days      = 0
+              months    = 0
+              years     = ls_mara_shelf-mhdhb
+              signum    = '+'
+            IMPORTING
+              calc_date = gv_bbdat.
+        WHEN OTHERS.
+          MESSAGE e004(zmsg_i2o_rf).
+      ENDCASE.
+
+      cs_rehu_prod-bbdat = gv_bbdat.
+
+    ENDIF.
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Field visibility and input control
+*--------------------------------------------------------------------*
+  IF cs_rehu_prod-matnr IS INITIAL
+     AND cs_rehu_prod-matnr_verif IS INITIAL.
+
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_on( lc_fld_batch ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_on( lc_fld_vbatch ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_on( lc_fld_bbdat ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_on( lc_fld_pddat ).
+
+  ELSE.
+
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_off( lc_fld_batch ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_off( lc_fld_vbatch ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_off( lc_fld_bbdat ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_invisible_off( lc_fld_pddat ).
+
+    /scwm/cl_rf_bll_srvc=>set_screlm_input_on( lc_fld_batch ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_input_on( lc_fld_vbatch ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_input_on( lc_fld_bbdat ).
+    /scwm/cl_rf_bll_srvc=>set_screlm_input_on( lc_fld_pddat ).
+
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Batch display conversion
+*--------------------------------------------------------------------*
+  IF cs_rehu_prod-charg IS NOT INITIAL.
+    CALL FUNCTION 'CONVERSION_EXIT_RFBA_OUTPUT'
+      EXPORTING
+        input  = cs_rehu_prod-charg
+      IMPORTING
+        output = lv_charg_verif.
+  ELSE.
+    lv_charg_verif = cs_rehu_prod-charg_verif.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Convert dates for screen display
+*--------------------------------------------------------------------*
+  CLEAR: lv_bbdat_ext,
+         lv_pddat_ext.
+
+  IF gv_bbdat IS NOT INITIAL.
+    WRITE gv_bbdat TO lv_bbdat_ext.
+  ENDIF.
+
+  IF gv_pddat IS NOT INITIAL.
+    WRITE gv_pddat TO lv_pddat_ext.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Push values to screen
+*--------------------------------------------------------------------*
+  CLEAR lt_dynp.
+
+  APPEND VALUE #( fieldname  = lc_fld_maktx
+                  fieldvalue = cs_rehu_prod-maktx ) TO lt_dynp.
+
+  APPEND VALUE #( fieldname  = lc_fld_altme
+                  fieldvalue = cs_rehu_prod-altme ) TO lt_dynp.
+
+  APPEND VALUE #( fieldname  = lc_fld_batch
+                  fieldvalue = lv_charg_verif ) TO lt_dynp.
+
+  APPEND VALUE #( fieldname  = lc_fld_vbatch
+                  fieldvalue = gv_vendor_batch ) TO lt_dynp.
+
+  APPEND VALUE #( fieldname  = lc_fld_bbdat
+                  fieldvalue = lv_bbdat_ext ) TO lt_dynp.
+
+  APPEND VALUE #( fieldname  = lc_fld_pddat
+                  fieldvalue = lv_pddat_ext ) TO lt_dynp.
+
+  CALL FUNCTION 'DYNP_VALUES_UPDATE'
+    EXPORTING
+      dyname     = lc_prog
+      dynumb     = lc_dynnr
+    TABLES
+      dynpfields = lt_dynp
+    EXCEPTIONS
+      OTHERS     = 1.
 
 ENDFUNCTION.
