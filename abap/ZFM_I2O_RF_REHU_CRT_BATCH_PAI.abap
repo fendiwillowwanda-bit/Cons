@@ -739,6 +739,40 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
+* Force redetermination so item picks up batch-derived
+* data (vendor batch / production date) from the batch master.
+*
+* Must run BEFORE the BBD write below, not after - sc_determine
+* re-derives item data from the reference document (which carries no
+* BBD), so writing BBD first and redetermining afterwards silently
+* wipes it back out. The standard pack_item_to_delivery flow
+* (LRF_RECEIVING_HUSF13) writes BBD only AFTER this same determine
+* call for exactly this reason.
+*--------------------------------------------------------------------*
+  CLEAR lt_item_key.
+  ls_item_key-docid  = cs_rehu_hu-docid.
+  ls_item_key-itemid = cs_rehu_hu-ritmid.
+  APPEND ls_item_key TO lt_item_key.
+
+  CLEAR ls_action.
+  ls_action-action_code = /scdl/if_bo_action_c=>sc_determine.
+
+  lo_dlv->execute(
+    EXPORTING
+      aspect       = /scdl/if_sp_c=>sc_asp_item
+      inkeys       = lt_item_key
+      inparam      = ls_action
+      action       = /scdl/if_sp_c=>sc_act_execute_action
+    IMPORTING
+      outrecords   = lt_outrecords
+      rejected     = lv_rejected
+      return_codes = lt_return_code ).
+
+  IF lv_rejected = abap_true.
+    MESSAGE e045(zmsg_i2o_rf).
+  ENDIF.
+
+*--------------------------------------------------------------------*
 * BBD to delivery item (ITEM_SAPEXT_PRDI aspect - valid,
 * registered aspect; BBD stored as a timestamp interval).
 *--------------------------------------------------------------------*
@@ -788,33 +822,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
 
     ENDIF.
 
-  ENDIF.
-
-*--------------------------------------------------------------------*
-* Force redetermination so item picks up batch-derived
-* data (vendor batch / production date) from the batch master.
-*--------------------------------------------------------------------*
-  CLEAR lt_item_key.
-  ls_item_key-docid  = cs_rehu_hu-docid.
-  ls_item_key-itemid = cs_rehu_hu-ritmid.
-  APPEND ls_item_key TO lt_item_key.
-
-  CLEAR ls_action.
-  ls_action-action_code = /scdl/if_bo_action_c=>sc_determine.
-
-  lo_dlv->execute(
-    EXPORTING
-      aspect       = /scdl/if_sp_c=>sc_asp_item
-      inkeys       = lt_item_key
-      inparam      = ls_action
-      action       = /scdl/if_sp_c=>sc_act_execute_action
-    IMPORTING
-      outrecords   = lt_outrecords
-      rejected     = lv_rejected
-      return_codes = lt_return_code ).
-
-  IF lv_rejected = abap_true.
-    MESSAGE e045(zmsg_i2o_rf).
   ENDIF.
 
 *--------------------------------------------------------------------*
