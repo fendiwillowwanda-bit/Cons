@@ -148,7 +148,8 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
         lv_xchpf         TYPE marc-xchpf,
         lv_xchpf_found   TYPE abap_bool,
         lv_matnr_for_batch TYPE matnr,
-        lv_batch_rejected  TYPE abap_bool.
+        lv_batch_rejected  TYPE abap_bool,
+        lv_itemid_after_batch TYPE /scdl/dl_itemid.
 
   lv_dlvno = gv_dlvno.
 
@@ -258,7 +259,7 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
         IMPORTING
           output = lv_matnr_for_batch.
 
-      CLEAR lv_batch_rejected.
+      CLEAR: lv_batch_rejected, lv_itemid_after_batch.
 
       PERFORM frm_ensure_batch_rehu
         USING    lv_lgnum
@@ -266,11 +267,23 @@ FUNCTION zfm_i2o_rf_rehu_zapack_pai.
                  lv_itemid
                  lv_matnr_for_batch
                  lv_plant
+                 lv_entitled_db
+                 lv_qty
+                 lv_uom
         CHANGING lv_batch_db
+                 lv_itemid_after_batch
                  lv_batch_rejected.
 
       IF lv_batch_rejected = abap_true OR lv_batch_db IS INITIAL.
         MESSAGE e029(zmsg_i2o_rf) RAISING error.
+      ENDIF.
+
+      " The batch now lives on a NEW batch-split (BSP) subitem, not the
+      " original item that was scanned - everything downstream (HU
+      " lock/init, AutoPack item build) must operate against that new
+      " item, or /SCWM/HU_AUTOPACK_IBDLV can't find/construct against it.
+      IF lv_itemid_after_batch IS NOT INITIAL.
+        lv_itemid = lv_itemid_after_batch.
       ENDIF.
 
     ENDIF.

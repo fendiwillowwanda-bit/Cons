@@ -27,20 +27,41 @@ FORM frm_ensure_batch_rehu
            iv_itemid    TYPE /scdl/dl_itemid
            iv_matnr_int TYPE matnr
            iv_werks     TYPE werks_d
+           iv_entitled  TYPE /scwm/de_entitled
+           iv_qty       TYPE /scdl/dl_quantity
+           iv_uom       TYPE /scwm/de_unit
   CHANGING cv_batchno   TYPE /scdl/dl_batchno
+           cv_itemid    TYPE /scdl/dl_itemid
            cv_rejected  TYPE abap_bool.
 
 * Creates the batch (if cv_batchno doesn't already exist as one) and
-* writes/saves it directly onto the inbound delivery item - the same
-* "Full qty only: assign batch/BBD directly to original item" mechanics
-* ZFM_I2O_RF_REHU_CRT_BATCH_PAI already uses for F3 Batch, extracted
-* here so Auto Pack can perform batch creation itself as its first
-* step (FDS: "Batch creation is done on first priority upon auto
-* pack"), instead of requiring F3 Batch to have already been pressed.
+* attaches it to the delivery item, so Auto Pack can perform batch
+* creation itself as its first step (FDS: "Batch creation is done on
+* first priority upon auto pack"), instead of requiring F3 Batch to
+* have already been pressed.
+*
+* Batch creation goes through /SCWM/RF_REHU_CRBA (the same standard FM
+* the manual Pack flow - pack_item_to_delivery in
+* /SCWM/LRF_RECEIVING_HUSF13 - uses) plus the EWM batch application
+* object save, instead of a bare VB_CREATE_BATCH: that's what actually
+* registers the batch with the EWM delivery/batch framework. A new
+* batch is then attached via a proper item SPLIT into a batch (BSP)
+* subitem, exactly like the standard flow does, rather than writing
+* the batch directly onto the original item - the delivery's own
+* consistency checks (item execute/before_save, and
+* /SCWM/HU_AUTOPACK_IBDLV's own level construction) expect that
+* sub-item hierarchy to exist for a batch-managed item (this also
+* matches ev_batch_initial's own "no batch AND no sub-item hierarchy"
+* exclusion rule found earlier in /SCWM/CL_DLV_PACK_IBDL->INIT).
+* Since the batch now lives on a NEW item, cv_itemid returns it so the
+* caller builds the AutoPack item list against the right item.
+*
 * BBD/ProdDate/Vendor Batch are read from the same gv_bbdat/gv_pddat/
 * gv_vendor_batch globals F3 Batch populates - if those are still
 * blank (user never entered BBD/ProdDate on the product screen), batch
 * creation can't proceed here either, same as it can't in F3 Batch.
+
+  CONSTANTS lc_subitem_no TYPE i VALUE 1.
 
   TYPES: BEGIN OF ty_mara_shelf,
            xchpf TYPE mara-xchpf,
@@ -49,38 +70,53 @@ FORM frm_ensure_batch_rehu
          END OF ty_mara_shelf.
 
   DATA: ls_mara_shelf       TYPE ty_mara_shelf,
-        ls_mcha             TYPE mcha,
         lv_batch_exists     TYPE abap_bool,
-        lv_generated_batch  TYPE /scmb/mdl_batch_id,
-        lv_batchno_ui       TYPE /scmb/mdl_batch_id,
-        lv_check_external   TYPE c LENGTH 1,
-        lv_subrc_vb         TYPE sy-subrc,
+        lv_batchno_ui       TYPE /scdl/dl_batchno,
         lv_mch_bbdat        TYPE dats,
         lv_mch_pddat        TYPE dats,
-        lv_mch_vendor_batch TYPE /scwm/de_vendor_batchno.
+        lv_mch_vendor_batch TYPE /scwm/de_vendor_batchno,
+        ls_batch_md         TYPE /scwm/dlv_md_prod_batch_det,
+        lo_md_access        TYPE REF TO /scwm/cl_dlv_md_access.
 
-  DATA: lt_return    TYPE STANDARD TABLE OF bapiret2,
-        lt_new_batch TYPE STANDARD TABLE OF mcha.
+  DATA: lv_matid TYPE /scwm/de_matid,
+        ls_proci TYPE /scdl/db_proci_i.
 
-  DATA: lo_dlv             TYPE REF TO /scdl/cl_sp_prd_inb,
-        lt_k_item          TYPE /scdl/t_sp_k_item,
-        ls_k_item          TYPE /scdl/s_sp_k_item,
-        lt_return_code     TYPE /scdl/t_sp_return_code,
+  DATA: lo_dlv         TYPE REF TO /scdl/cl_sp_prd_inb,
+        lo_batch       TYPE REF TO /scwm/cl_batch_appl,
+        lo_bom         TYPE REF TO /scdl/cl_bo_management,
+        lo_bo          TYPE REF TO /scdl/if_bo,
+        lo_item        TYPE REF TO /scdl/cl_dl_item_write,
+        lt_k_item      TYPE /scdl/t_sp_k_item,
+        ls_k_item      TYPE /scdl/s_sp_k_item,
+        lt_return_code TYPE /scdl/t_sp_return_code,
+        lv_rejected    TYPE boole_d,
+        lv_timezone    TYPE tznzone,
+        lv_tstamp_bbd  TYPE timestamp,
+        lv_new_batchid TYPE /scwm/de_batchid,
+        lv_new_item_id TYPE /scdl/dl_itemid.
+
+  DATA: lt_item_key   TYPE /scdl/t_sp_k_item,
+        ls_item_key   TYPE /scdl/s_sp_k_item,
+        ls_action     TYPE /scdl/s_sp_act_action,
+        ls_context    TYPE /scdl/s_sp_act_item_split,
+        lt_outrecords TYPE /scdl/t_sp_a_item,
+        ls_outrecords TYPE /scdl/s_sp_a_item.
+
+  DATA: ls_inrecords_qty  TYPE /scdl/s_sp_a_item_quantity,
+        lt_inrecords_qty  TYPE /scdl/t_sp_a_item_quantity,
+        lt_outrecords_qty TYPE /scdl/t_sp_a_item_quantity.
+
+  DATA: ls_inrecords_prod  TYPE /scdl/s_sp_a_item_product,
         lt_inrecords_prod  TYPE /scdl/t_sp_a_item_product,
-        ls_inrecords_prod  TYPE /scdl/s_sp_a_item_product,
-        lt_outrecords_prod TYPE /scdl/t_sp_a_item_product,
-        lt_inrecords_bbd   TYPE /scdl/t_sp_a_item_sapext_prdi,
-        ls_inrecords_bbd   TYPE /scdl/s_sp_a_item_sapext_prdi,
-        lt_outrecords_bbd  TYPE /scdl/t_sp_a_item_sapext_prdi,
-        lt_item_key        TYPE /scdl/t_sp_k_item,
-        ls_item_key        TYPE /scdl/s_sp_k_item,
-        ls_action          TYPE /scdl/s_sp_act_action,
-        lt_outrecords      TYPE /scdl/t_sp_a_item,
-        lv_rejected        TYPE boole_d,
-        lv_timezone        TYPE tznzone,
-        lv_tstamp_bbd      TYPE timestamp.
+        lt_outrecords_prod TYPE /scdl/t_sp_a_item_product.
 
-  CLEAR cv_rejected.
+  DATA: ls_inrecords_bbd  TYPE /scdl/s_sp_a_item_sapext_prdi,
+        lt_inrecords_bbd  TYPE /scdl/t_sp_a_item_sapext_prdi,
+        lt_outrecords_bbd TYPE /scdl/t_sp_a_item_sapext_prdi.
+
+  FIELD-SYMBOLS <ls_parameter> TYPE any.
+
+  CLEAR: cv_rejected, cv_itemid.
 
   lv_batchno_ui = cv_batchno.
 
@@ -93,43 +129,83 @@ FORM frm_ensure_batch_rehu
     WHERE matnr = @iv_matnr_int.
 
 *--------------------------------------------------------------------*
+* Material GUID (needed for /SCWM/RF_REHU_CRBA and the item split)
+*--------------------------------------------------------------------*
+  SELECT SINGLE *
+    FROM /scdl/db_proci_i
+    WHERE docid  = @iv_docid
+      AND itemid = @iv_itemid
+    INTO @ls_proci.
+
+  lv_matid = ls_proci-productid.
+
+*--------------------------------------------------------------------*
 * Check existing batch and retrieve BBD / ProdDate / Vendor Batch
 *--------------------------------------------------------------------*
-  CLEAR: lv_batch_exists, lv_mch_bbdat, lv_mch_pddat, lv_mch_vendor_batch.
+  CLEAR: lv_batch_exists, lv_mch_bbdat, lv_mch_pddat, lv_mch_vendor_batch, ls_batch_md.
 
   IF lv_batchno_ui IS NOT INITIAL.
 
-    SELECT SINGLE vfdat, hsdat, licha
-      FROM mch1
-      INTO (@lv_mch_bbdat, @lv_mch_pddat, @lv_mch_vendor_batch)
-      WHERE matnr = @iv_matnr_int
-        AND charg = @lv_batchno_ui.
+    TRY.
+        lo_md_access = /scwm/cl_dlv_md_access=>get_instance( ).
 
-    IF sy-subrc = 0.
-      lv_batch_exists = abap_true.
-    ELSE.
+        ls_batch_md = lo_md_access->get_batch_detail(
+                        iv_productno         = iv_matnr_int
+                        iv_batchno           = lv_batchno_ui
+                        iv_lgnum             = iv_lgnum
+                        iv_entitled          = iv_entitled
+                        iv_no_classification = abap_false ).
+
+        lv_batch_exists = abap_true.
+
+        IF gv_bbdat IS INITIAL.
+          gv_bbdat = ls_batch_md-sled_bbd.
+        ENDIF.
+        IF gv_pddat IS INITIAL.
+          gv_pddat = ls_batch_md-prod_date.
+        ENDIF.
+        IF gv_vendor_batch IS INITIAL.
+          gv_vendor_batch = ls_batch_md-vendor_batch.
+        ENDIF.
+
+      CATCH /scwm/cx_dlv_batch.
+    ENDTRY.
+
+    IF lv_batch_exists = abap_false.
+
       SELECT SINGLE vfdat, hsdat, licha
-        FROM mcha
+        FROM mch1
         INTO (@lv_mch_bbdat, @lv_mch_pddat, @lv_mch_vendor_batch)
         WHERE matnr = @iv_matnr_int
-          AND werks = @iv_werks
           AND charg = @lv_batchno_ui.
 
       IF sy-subrc = 0.
         lv_batch_exists = abap_true.
-      ENDIF.
-    ENDIF.
+      ELSE.
+        SELECT SINGLE vfdat, hsdat, licha
+          FROM mcha
+          INTO (@lv_mch_bbdat, @lv_mch_pddat, @lv_mch_vendor_batch)
+          WHERE matnr = @iv_matnr_int
+            AND werks = @iv_werks
+            AND charg = @lv_batchno_ui.
 
-    IF lv_batch_exists = abap_true.
-      IF gv_bbdat IS INITIAL.
-        gv_bbdat = lv_mch_bbdat.
+        IF sy-subrc = 0.
+          lv_batch_exists = abap_true.
+        ENDIF.
       ENDIF.
-      IF gv_pddat IS INITIAL.
-        gv_pddat = lv_mch_pddat.
+
+      IF lv_batch_exists = abap_true.
+        IF gv_bbdat IS INITIAL.
+          gv_bbdat = lv_mch_bbdat.
+        ENDIF.
+        IF gv_pddat IS INITIAL.
+          gv_pddat = lv_mch_pddat.
+        ENDIF.
+        IF gv_vendor_batch IS INITIAL.
+          gv_vendor_batch = lv_mch_vendor_batch.
+        ENDIF.
       ENDIF.
-      IF gv_vendor_batch IS INITIAL.
-        gv_vendor_batch = lv_mch_vendor_batch.
-      ENDIF.
+
     ENDIF.
 
   ENDIF.
@@ -182,81 +258,37 @@ FORM frm_ensure_batch_rehu
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Create batch master only if not existing
+* If the batch already exists, it's already attached to some item -
+* nothing further to create/split here.
 *--------------------------------------------------------------------*
-  IF lv_batch_exists = abap_false.
-
-    IF lv_batchno_ui IS INITIAL.
-
-      CLEAR lv_generated_batch.
-
-      CALL FUNCTION 'ZFM_I2O_GET_ALNUM7_SEQ'
-        EXPORTING
-          iv_seqname    = 'EWM_BATCH'
-          iv_start      = 'L000000'
-          iv_reason     = 'NBAT'
-          iv_matnr      = iv_matnr_int
-          iv_werks      = iv_werks
-        IMPORTING
-          ev_number     = lv_generated_batch
-        EXCEPTIONS
-          lock_failed   = 1
-          overflow      = 2
-          invalid_input = 3
-          OTHERS        = 4.
-
-      IF sy-subrc <> 0 OR lv_generated_batch IS INITIAL.
-        cv_rejected = abap_true.
-        RETURN.
-      ENDIF.
-
-      lv_batchno_ui = lv_generated_batch.
-
-    ENDIF.
-
-    lv_check_external = abap_true.
-
-    CLEAR ls_mcha.
-    ls_mcha-matnr = iv_matnr_int.
-    ls_mcha-werks = iv_werks.
-    ls_mcha-charg = lv_batchno_ui.
-    ls_mcha-licha = gv_vendor_batch.
-    ls_mcha-hsdat = gv_pddat.
-    ls_mcha-vfdat = gv_bbdat.
-
-    CALL FUNCTION 'VB_CREATE_BATCH'
-      EXPORTING
-        ymcha               = ls_mcha
-        no_change_document  = space
-        check_external      = lv_check_external
-        check_customer      = 'X'
-      IMPORTING
-        ymcha               = ls_mcha
-      TABLES
-        new_batch           = lt_new_batch
-        return              = lt_return
-      EXCEPTIONS
-        batch_exist         = 12
-        OTHERS              = 34.
-
-    lv_subrc_vb = sy-subrc.
-
-    " subrc 12 (batch already exists) is fine here - it means a
-    " concurrent process created it between our existence check and
-    " this call; carry on and use it. Any other non-zero subrc is a
-    " genuine failure.
-    IF lv_subrc_vb <> 0 AND lv_subrc_vb <> 12.
-      cv_rejected = abap_true.
-      RETURN.
-    ENDIF.
-
-    COMMIT WORK AND WAIT.
-    lv_batchno_ui = ls_mcha-charg.
-
+  IF lv_batch_exists = abap_true.
+    cv_batchno = lv_batchno_ui.
+    cv_itemid  = iv_itemid.
+    RETURN.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Assign batch/BBD directly to the delivery item
+* Create the batch via the standard mechanism (same as manual Pack)
+*--------------------------------------------------------------------*
+  CALL FUNCTION '/SCWM/RF_REHU_CRBA'
+    EXPORTING
+      cv_matid    = lv_matid
+      cv_matnr    = iv_matnr_int
+      cv_batch    = lv_batchno_ui
+      iv_lgnum    = iv_lgnum
+      iv_entitled = iv_entitled
+    IMPORTING
+      ev_batchid  = lv_new_batchid
+      eo_batch    = lo_batch.
+
+  IF lo_batch IS NOT BOUND OR lv_new_batchid IS INITIAL.
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Split the item into a batch (BSP) subitem, then attach the new
+* batch/BBD to that subitem - not the original item.
 *--------------------------------------------------------------------*
   /scwm/cl_tm=>set_lgnum( iv_lgnum ).
 
@@ -281,11 +313,88 @@ FORM frm_ensure_batch_rehu
     RETURN.
   ENDIF.
 
+  CLEAR lt_item_key.
+  ls_item_key-docid  = iv_docid.
+  ls_item_key-itemid = iv_itemid.
+  APPEND ls_item_key TO lt_item_key.
+
+  CLEAR ls_action.
+  ls_context-hierarchy_type  = /scdl/if_dl_hierarchy_c=>sc_type_charge.
+  ls_context-number_subitems = lc_subitem_no.
+  ls_action-action_code      = /scdl/if_bo_action_c=>sc_split_item.
+
+  CREATE DATA ls_action-action_control TYPE ('/SCDL/S_SP_ACT_ITEM_SPLIT').
+  ASSIGN ls_action-action_control->* TO <ls_parameter>.
+  MOVE-CORRESPONDING ls_context TO <ls_parameter>.
+
+  lo_dlv->execute(
+    EXPORTING
+      aspect       = /scdl/if_sp_c=>sc_asp_item
+      inkeys       = lt_item_key
+      inparam      = ls_action
+      action       = /scdl/if_sp_c=>sc_act_execute_action
+    IMPORTING
+      outrecords   = lt_outrecords
+      rejected     = lv_rejected
+      return_codes = lt_return_code ).
+
+  IF lv_rejected = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  DELETE lt_outrecords WHERE itemid = iv_itemid.
+  READ TABLE lt_outrecords INTO ls_outrecords WITH KEY docid = iv_docid.
+
+  IF sy-subrc <> 0 OR ls_outrecords-itemid IS INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  lv_new_item_id = ls_outrecords-itemid.
+
+*--------------------------------------------------------------------*
+* Full quantity onto the new subitem (this is the "first batch
+* creation" case - no manual split amount to honor, the whole open
+* quantity moves onto the batch subitem, same as manual Pack does when
+* ls_free-open_qty-qty is fully consumed by the new BSP item).
+*--------------------------------------------------------------------*
+  CLEAR: ls_inrecords_qty, lt_inrecords_qty, lt_outrecords_qty.
+
+  ls_inrecords_qty-docid  = iv_docid.
+  ls_inrecords_qty-itemid = lv_new_item_id.
+  ls_inrecords_qty-qty    = iv_qty.
+  ls_inrecords_qty-uom    = iv_uom.
+
+  APPEND ls_inrecords_qty TO lt_inrecords_qty.
+
+  lo_dlv->/scdl/if_sp1_aspect~update(
+    EXPORTING
+      aspect       = /scdl/if_sp_c=>sc_asp_item_quantity
+      inrecords    = lt_inrecords_qty
+    IMPORTING
+      outrecords   = lt_outrecords_qty
+      rejected     = lv_rejected
+      return_codes = lt_return_code ).
+
+  IF lv_rejected = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
   CLEAR: ls_inrecords_prod, lt_inrecords_prod, lt_outrecords_prod.
 
-  ls_inrecords_prod-docid   = iv_docid.
-  ls_inrecords_prod-itemid  = iv_itemid.
-  ls_inrecords_prod-batchno = lv_batchno_ui.
+  ls_inrecords_prod-docid     = iv_docid.
+  ls_inrecords_prod-itemid    = lv_new_item_id.
+  ls_inrecords_prod-productid = lv_matid.
+  ls_inrecords_prod-productno = iv_matnr_int.
+  ls_inrecords_prod-batchno   = lv_batchno_ui.
 
   APPEND ls_inrecords_prod TO lt_inrecords_prod.
 
@@ -326,7 +435,7 @@ FORM frm_ensure_batch_rehu
             TIME ZONE lv_timezone.
 
       ls_inrecords_bbd-docid   = iv_docid.
-      ls_inrecords_bbd-itemid  = iv_itemid.
+      ls_inrecords_bbd-itemid  = lv_new_item_id.
       ls_inrecords_bbd-tzonebb = lv_timezone.
       ls_inrecords_bbd-tstfrbb = lv_tstamp_bbd.
       ls_inrecords_bbd-tsttobb = lv_tstamp_bbd.
@@ -353,9 +462,74 @@ FORM frm_ensure_batch_rehu
 
   ENDIF.
 
+*--------------------------------------------------------------------*
+* Valuate and save the batch object itself, now that the new BSP item
+* it belongs to exists (matches manual Pack's own sequence: split
+* first, then valuate/save the batch against that split item).
+*--------------------------------------------------------------------*
+  lo_bom = /scdl/cl_bo_management=>get_instance( ).
+  lo_bo  = lo_bom->get_bo_by_id( iv_docid ).
+  lo_item ?= lo_bo->get_item( lv_new_item_id ).
+
+  TRY.
+      IF lo_batch->mo_valuat_mng IS BOUND.
+        /scwm/cl_dlv_batch_internal=>item_batch_valuate(
+          iv_lgnum = iv_lgnum
+          io_item  = lo_item
+          io_batch = lo_batch ).
+      ENDIF.
+    CATCH /scwm/cx_dlv_batch /scwm/cx_dlv_chval.
+  ENDTRY.
+
+  TRY.
+      lo_batch->before_save( ).
+    CATCH /scwm/cx_batch_management.
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+      CALL METHOD /scwm/cl_tm=>cleanup( ).
+      cv_rejected = abap_true.
+      RETURN.
+  ENDTRY.
+
+  /scwm/cl_batch_appl=>save( ).
+
+*--------------------------------------------------------------------*
+* Redetermine main item and the new BSP item, to clear the blocked
+* status now that the BSP exists (matches manual Pack's own
+* "redetermine main item and BSP" step).
+*--------------------------------------------------------------------*
   CLEAR lt_item_key.
   ls_item_key-docid  = iv_docid.
   ls_item_key-itemid = iv_itemid.
+  APPEND ls_item_key TO lt_item_key.
+
+  ls_item_key-docid  = iv_docid.
+  ls_item_key-itemid = lv_new_item_id.
+  APPEND ls_item_key TO lt_item_key.
+
+  CLEAR ls_action.
+  ls_action-action_code = /scdl/if_bo_action_c=>sc_validate.
+
+  lo_dlv->execute(
+    EXPORTING
+      aspect       = /scdl/if_sp_c=>sc_asp_item
+      inkeys       = lt_item_key
+      inparam      = ls_action
+      action       = /scdl/if_sp_c=>sc_act_execute_action
+    IMPORTING
+      outrecords   = lt_outrecords
+      rejected     = lv_rejected
+      return_codes = lt_return_code ).
+
+  IF lv_rejected = abap_true.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    CALL METHOD /scwm/cl_tm=>cleanup( ).
+    cv_rejected = abap_true.
+    RETURN.
+  ENDIF.
+
+  CLEAR lt_item_key.
+  ls_item_key-docid  = iv_docid.
+  ls_item_key-itemid = lv_new_item_id.
   APPEND ls_item_key TO lt_item_key.
 
   CLEAR ls_action.
@@ -403,6 +577,7 @@ FORM frm_ensure_batch_rehu
   CALL METHOD /scwm/cl_tm=>cleanup( ).
 
   cv_batchno = lv_batchno_ui.
+  cv_itemid  = lv_new_item_id.
 
 ENDFORM.
 
