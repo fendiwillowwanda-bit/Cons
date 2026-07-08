@@ -22,7 +22,6 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lc_dynnr      TYPE sydynnr        VALUE '9015',
     lc_zbatch     TYPE /scwm/de_fcode VALUE 'ZBATCH',
     lc_zclass     TYPE /scwm/de_fcode VALUE 'ZCLASS',
-    lc_zsave      TYPE /scwm/de_fcode VALUE 'ZSAVE',
     lc_pbo2       TYPE /scwm/de_fcode VALUE 'PBO2',
     lc_klart      TYPE klah-klart     VALUE '023',
     lc_class      TYPE klah-class     VALUE 'BC_FERTHALB',
@@ -201,11 +200,10 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* From here on, only ZBATCH / ZCLASS / ZSAVE fcodes continue processing.
+* From here on, only ZBATCH / ZCLASS fcodes continue processing.
 *--------------------------------------------------------------------*
   IF lv_fcode <> lc_zbatch
-     AND lv_fcode <> lc_zclass
-     AND lv_fcode <> lc_zsave.
+     AND lv_fcode <> lc_zclass.
     RETURN.
   ENDIF.
 
@@ -820,34 +818,11 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
       OTHERS     = 1.
 
 *--------------------------------------------------------------------*
-* ZBATCH: create/validate the batch only - do NOT persist to the item
-* yet, for full qty OR partial qty. The new ZSAVE action below is now
-* the single place that attaches batch/BBD to the delivery item; we no
-* longer rely on F1 Pack to do this for partial qty, nor on ZBATCH
-* auto-saving for full qty.
-*--------------------------------------------------------------------*
-  IF lv_fcode <> lc_zsave.
-
-    /scwm/cl_rf_bll_srvc=>set_field( space ).
-    /scwm/cl_rf_bll_srvc=>set_prmod(
-      /scwm/cl_rf_bll_srvc=>c_prmod_foreground ).
-    /scwm/cl_rf_bll_srvc=>set_fcode( lc_pbo2 ).
-
-    IF lv_existing_msg = abap_true.
-      MESSAGE s046(zmsg_i2o_rf) DISPLAY LIKE 'E'.
-    ELSE.
-      MESSAGE s049(zmsg_i2o_rf).
-    ENDIF.
-
-    RETURN.
-
-  ENDIF.
-
-*--------------------------------------------------------------------*
-* ZSAVE, partial qty: split into a new BSP subitem and attach batch/
-* BBD to that subitem - ported out of pack_item_to_delivery's own
-* "partial / tolerance-overage" branch so this no longer depends on
-* F1 Pack ever being pressed.
+* Partial qty: split into a new BSP subitem and attach batch/BBD to
+* that subitem right here - ported out of pack_item_to_delivery's own
+* "partial / tolerance-overage" branch so F3 Batch persists to the
+* item on its own for partial qty too, without depending on F1 Pack
+* ever being pressed afterward.
 *--------------------------------------------------------------------*
   IF lv_full_qty = abap_false.
 
@@ -888,7 +863,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* ZSAVE, full qty: assign batch/BBD directly to original item
+* Full qty only: assign batch/BBD directly to original item
 *--------------------------------------------------------------------*
   /scwm/cl_tm=>set_lgnum( cs_rehu-lgnum ).
 
