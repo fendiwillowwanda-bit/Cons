@@ -52,6 +52,7 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
     lv_rejected         TYPE boole_d,
     lv_timezone         TYPE tznzone,
     lv_tstamp_bbd       TYPE timestamp,
+    lv_tstamp_pd        TYPE timestamp,
     lv_item_time_dummy  TYPE syst-uzeit.
 
   DATA:
@@ -819,10 +820,10 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* BBD to delivery item (ITEM_SAPEXT_PRDI aspect - valid,
-* registered aspect; BBD stored as a timestamp interval).
+* BBD + Production Date to delivery item (ITEM_SAPEXT_PRDI aspect -
+* valid, registered aspect; both stored as timestamp intervals).
 *--------------------------------------------------------------------*
-  IF lv_bbdat IS NOT INITIAL.
+  IF lv_bbdat IS NOT INITIAL OR lv_pddat IS NOT INITIAL.
 
     CALL FUNCTION '/SCWM/LGNUM_TZONE_READ'
       EXPORTING
@@ -839,17 +840,31 @@ FUNCTION zfm_i2o_rf_rehu_crt_batch_pai.
       CLEAR: ls_inrecords_bbd,
              lt_inrecords_bbd,
              lt_outrecords_bbd,
-             lv_tstamp_bbd.
+             lv_tstamp_bbd,
+             lv_tstamp_pd.
 
-      CONVERT DATE lv_bbdat
-            INTO TIME STAMP lv_tstamp_bbd
-            TIME ZONE lv_timezone.
+      ls_inrecords_bbd-docid  = cs_rehu_hu-docid.
+      ls_inrecords_bbd-itemid = cs_rehu_hu-ritmid.
 
-      ls_inrecords_bbd-docid   = cs_rehu_hu-docid.
-      ls_inrecords_bbd-itemid  = cs_rehu_hu-ritmid.
-      ls_inrecords_bbd-tzonebb = lv_timezone.
-      ls_inrecords_bbd-tstfrbb = lv_tstamp_bbd.
-      ls_inrecords_bbd-tsttobb = lv_tstamp_bbd.
+      IF lv_bbdat IS NOT INITIAL.
+        CONVERT DATE lv_bbdat
+              INTO TIME STAMP lv_tstamp_bbd
+              TIME ZONE lv_timezone.
+
+        ls_inrecords_bbd-tzonebb = lv_timezone.
+        ls_inrecords_bbd-tstfrbb = lv_tstamp_bbd.
+        ls_inrecords_bbd-tsttobb = lv_tstamp_bbd.
+      ENDIF.
+
+      IF lv_pddat IS NOT INITIAL.
+        CONVERT DATE lv_pddat
+              INTO TIME STAMP lv_tstamp_pd
+              TIME ZONE lv_timezone.
+
+        ls_inrecords_bbd-tzonepd = lv_timezone.
+        ls_inrecords_bbd-tstfrpd = lv_tstamp_pd.
+        ls_inrecords_bbd-tsttopd = lv_tstamp_pd.
+      ENDIF.
 
       APPEND ls_inrecords_bbd TO lt_inrecords_bbd.
 
