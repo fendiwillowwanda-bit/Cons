@@ -8,19 +8,23 @@ METHOD /scwm/if_ex_hu_basics_huhdr~create.
 * holding true, pass a real correlation key through instead of
 * guessing from queue order.
 *
-* FIX: manual "Repack HU" at the work center (OB02) never runs
-* ENRICH_DATA, so LT_CTX is always empty for it and this method used
-* to RETURN with the new HU's destination left blank - confirmed via
-* debugger (LT_CTX = Initial Standard Table at the IF check). Added
-* PATH 2 below: when the staging queue has nothing, find the SOURCE
-* HU via the warehouse task that moved stock into this new HU
-* (NLENR = this HU, VLENR = source HU) and copy its destination
-* bin/psa. Works for a plain 1:1 repack (single HU) and for an HU
-* split (each new HU independently finds its own source WT). If the
-* new HU already has a GUID_HU_TOP at creation (nested case), also
-* push the value through the whole hierarchy via
-* ZFM_I2O_UPD_HU_TOP_DEST so the top HU + siblings stay in sync -
-* CS_HUHDR only updates the one record being created right now.
+* FIX: manual "Repack HU" (OB02 / RF /SCWM/RFUI, both go through the
+* same /scwm/cl_wm_packing framework) never runs ENRICH_DATA, so
+* LT_CTX is always empty for it and this method used to RETURN with
+* the new HU's destination left blank - confirmed via debugger
+* (LT_CTX = Initial Standard Table at the IF check). Added PATH 2
+* below: when the staging queue has nothing, find the SOURCE HU via
+* the warehouse task that moved stock into this new HU (NLENR = this
+* HU, VLENR = source HU) and copy its destination bin/psa. Works for
+* a plain 1:1 repack (single HU) and for an HU split (each new HU
+* independently finds its own source WT).
+*
+* Also confirmed via debugger: modifying CS_HUHDR-DESTINATION_BIN/PSA
+* here computes the right value but does NOT reliably persist to the
+* DB through the packing framework's own save - the new HU still came
+* out blank in the UI. So the actual persistence is forced via an
+* explicit UPDATE (CALL FUNCTION ... IN UPDATE TASK) at the end of
+* this method instead of trusting CS_HUHDR to survive to the insert.
 
   DATA: lv_lgnum       TYPE /scwm/lgnum,
         lv_procty      TYPE /scwm/de_procty,
@@ -182,22 +186,28 @@ METHOD /scwm/if_ex_hu_basics_huhdr~create.
   cs_huhdr-destination_psa = ls_src_hu-destination_psa.
 
 *--------------------------------------------------------------------*
-* Nested case: this new HU already has a top at creation time -
-* CS_HUHDR above only saves this one record, so push the value
-* through the whole hierarchy (top HU + all its children) too.
-* Single-level HU: GUID_HU_TOP is blank, nothing else to update -
-* this record IS the lowest (and only) level, already handled above.
+* FIX: setting CS_HUHDR here does NOT reliably reach the database -
+* confirmed via debugger (value was correctly derived above, but the
+* new HU still showed blank Final Dest. PSA/Bin afterwards in the
+* Work Center/RF UI). The standard packing framework's own persist
+* logic apparently doesn't carry DESTINATION_BIN/PSA through from this
+* CHANGING parameter into its INSERT of the new HU header.
+*
+* Force it with an explicit UPDATE instead, deferred to the update
+* task so it runs after the framework's own INSERT of this HU header
+* has gone in. Keyed by HUIDENT, which is confirmed populated at
+* CREATE time (unlike GUID_HU_TOP, which is blank for a single-level
+* HU, and unlike relying on GUID_HU that may not be safe to assume
+* here). ZFM_I2O_UPD_PICKHU_DEST already resolves HUIDENT -> top HU
+* (or itself if there's no top) and updates top + all children, so
+* this covers both the nested and single-level case in one call.
 *--------------------------------------------------------------------*
-  IF cs_huhdr-guid_hu_top IS NOT INITIAL.
-
-    CALL FUNCTION 'ZFM_I2O_UPD_HU_TOP_DEST'
-      IN UPDATE TASK
-      EXPORTING
-        iv_lgnum           = lv_lgnum
-        iv_guid_top        = cs_huhdr-guid_hu_top
-        iv_destination_bin = cs_huhdr-destination_bin
-        iv_destination_psa = cs_huhdr-destination_psa.
-
-  ENDIF.
+  CALL FUNCTION 'ZFM_I2O_UPD_PICKHU_DEST'
+    IN UPDATE TASK
+    EXPORTING
+      iv_lgnum           = lv_lgnum
+      iv_huident         = cs_huhdr-huident
+      iv_destination_bin = cs_huhdr-destination_bin
+      iv_destination_psa = cs_huhdr-destination_psa.
 
 ENDMETHOD.
