@@ -955,7 +955,11 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   FIELD-SYMBOLS:
     <ls_od_itm>          TYPE any,
     <lv_od_quan_target>  TYPE any,
-    <lv_od_quan_actual>  TYPE any.
+    <lv_od_quan_actual>  TYPE any,
+    <lv_od_matid>        TYPE any,
+    <lv_od_batchid>      TYPE any,
+    <lv_od_huident>      TYPE any,
+    <lv_od_lgpla>        TYPE any.
 
   TRY.
       CALL FUNCTION '/SCWM/DIFF_ANALYZER_GET_INST'
@@ -1007,9 +1011,24 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * original quant (QUAN_TARGET = planned qty, QUAN_ACTUAL = 0) and one
 * against the new quant the count created (QUAN_TARGET = 0,
 * QUAN_ACTUAL = counted qty). These exact quantities are known to us
-* (lv_plan_qty / lv_actual_qty), so matching on them reliably isolates
-* just this transaction's own pair regardless of how many older,
-* still-unresolved differences exist for this material+batch.
+* (lv_plan_qty / lv_actual_qty), but on their own they are not a safe
+* key either - repeated test/production runs against this same
+* product routinely submit the same plan/actual quantities, so a
+* quantity-only match can still pull in an unrelated stuck pair from
+* an earlier run on a different HU/bin (exactly what the WM Monitor
+* screenshots showed: several PI doc pairs for the same product all
+* showing the same book/counted quantities).
+*
+* /SCWM/S_ASP_DIFF_OD_ITM was confirmed (via SE11) to also carry
+* MATID/BATCHID (UI_STOCK include) and HUIDENT/LGPLA (own aspect
+* fields) - all four are already known before GET_DIFFERENCES is ever
+* called (resolved earlier via /SCWM/SELECT_STOCK: lv_matid,
+* lv_batchid, lv_huident, lv_lgpla). Requiring them to match narrows
+* the quantity-pair match down to this transaction's own HU/bin/batch,
+* so a leftover pair from a different HU/bin can no longer collide on
+* quantity alone. Each check only excludes a row when the field is
+* actually populated and different, so a row that happens not to carry
+* one of these fields is not wrongly dropped.
 *
 * LT_ASP_OI_CUM is left untouched: it aggregates at a coarser level
 * shared across all items for this material and does not need to
@@ -1018,12 +1037,38 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       CLEAR lt_asp_od_itm_scoped.
 
       LOOP AT lt_asp_od_itm ASSIGNING <ls_od_itm>.
-        UNASSIGN: <lv_od_quan_target>, <lv_od_quan_actual>.
+        UNASSIGN: <lv_od_quan_target>, <lv_od_quan_actual>,
+                   <lv_od_matid>, <lv_od_batchid>,
+                   <lv_od_huident>, <lv_od_lgpla>.
 
         ASSIGN COMPONENT 'QUAN_TARGET' OF STRUCTURE <ls_od_itm> TO <lv_od_quan_target>.
         ASSIGN COMPONENT 'QUAN_ACTUAL' OF STRUCTURE <ls_od_itm> TO <lv_od_quan_actual>.
+        ASSIGN COMPONENT 'MATID'       OF STRUCTURE <ls_od_itm> TO <lv_od_matid>.
+        ASSIGN COMPONENT 'BATCHID'     OF STRUCTURE <ls_od_itm> TO <lv_od_batchid>.
+        ASSIGN COMPONENT 'HUIDENT'     OF STRUCTURE <ls_od_itm> TO <lv_od_huident>.
+        ASSIGN COMPONENT 'LGPLA'       OF STRUCTURE <ls_od_itm> TO <lv_od_lgpla>.
 
         CHECK <lv_od_quan_target> IS ASSIGNED AND <lv_od_quan_actual> IS ASSIGNED.
+
+        IF <lv_od_matid> IS ASSIGNED AND <lv_od_matid> IS NOT INITIAL
+           AND <lv_od_matid> <> lv_matid.
+          CONTINUE.
+        ENDIF.
+
+        IF <lv_od_batchid> IS ASSIGNED AND <lv_od_batchid> IS NOT INITIAL
+           AND lv_batchid IS NOT INITIAL AND <lv_od_batchid> <> lv_batchid.
+          CONTINUE.
+        ENDIF.
+
+        IF <lv_od_huident> IS ASSIGNED AND <lv_od_huident> IS NOT INITIAL
+           AND <lv_od_huident> <> lv_huident.
+          CONTINUE.
+        ENDIF.
+
+        IF <lv_od_lgpla> IS ASSIGNED AND <lv_od_lgpla> IS NOT INITIAL
+           AND <lv_od_lgpla> <> lv_lgpla.
+          CONTINUE.
+        ENDIF.
 
         IF ( <lv_od_quan_target> = lv_plan_qty   AND <lv_od_quan_actual> = 0 )
         OR ( <lv_od_quan_target> = 0             AND <lv_od_quan_actual> = lv_actual_qty ).
