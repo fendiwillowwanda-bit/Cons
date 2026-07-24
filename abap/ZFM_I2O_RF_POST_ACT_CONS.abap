@@ -1151,6 +1151,74 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   /scwm/cl_rf_bll_srvc=>set_prmod( /scwm/cl_rf_bll_srvc=>c_prmod_foreground ).
 
 *--------------------------------------------------------------------*
+* Refresh the stock GUIDs the caller will consume against.
+*
+* ZFM_I2O_RF_MICOTR_MIQUSL_PAI calls /SCWM/CL_RF_MFG_CON's
+* POST_CONSUMPTION next, which posts the standard 261 by looking up
+* the quant directly via CS_CHG_DATA-GUID_STOCK/GUID_PARENT - it does
+* not search by material/bin. Those GUIDs were captured earlier in
+* this RF session (before this function ran), against the ORIGINAL
+* quant. The PI count + Diff Analyzer above retire that quant and
+* replace it with a new one once the counted difference posts, so the
+* original GUID_STOCK is stale by the time POST_CONSUMPTION runs -
+* confirmed via debugger: POST_CONSUMPTION_INTERNAL raised "No stock
+* matched the selection" against it. Re-resolving the stock item now,
+* after the Diff Analyzer's own posting has committed, picks up
+* whichever quant currently represents this HU/material/batch.
+* GUID_HU/GUID_LOC are left untouched - the physical HU and bin have
+* not moved, only the quant record inside them was superseded.
+*--------------------------------------------------------------------*
+  CLEAR: lt_huitm, lt_huhdr.
+
+  CALL FUNCTION '/SCWM/SELECT_STOCK'
+    EXPORTING
+      iv_lgnum    = lv_lgnum
+      ir_huident  = lt_r_huident
+      iv_tolerant = abap_true
+    IMPORTING
+      et_huitm    = lt_huitm
+      et_huhdr    = lt_huhdr
+    EXCEPTIONS
+      error       = 1
+      OTHERS      = 2.
+
+  IF sy-subrc = 0 AND lt_huitm IS NOT INITIAL.
+    UNASSIGN <ls_huitm>.
+
+    LOOP AT lt_huitm ASSIGNING <ls_huitm>.
+      lv_match = abap_true.
+
+      ASSIGN COMPONENT 'MATID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+      IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL AND <lv_src> <> lv_matid.
+        lv_match = abap_false.
+      ENDIF.
+
+      IF lv_match = abap_true AND lv_batchid IS NOT INITIAL.
+        ASSIGN COMPONENT 'BATCHID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+        IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL AND <lv_src> <> lv_batchid.
+          lv_match = abap_false.
+        ENDIF.
+      ENDIF.
+
+      IF lv_match = abap_true.
+        EXIT.
+      ENDIF.
+    ENDLOOP.
+
+    IF <ls_huitm> IS ASSIGNED.
+      ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE <ls_huitm> TO <lv_src>.
+      IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
+        cs_chg_data-guid_stock = <lv_src>.
+      ENDIF.
+
+      ASSIGN COMPONENT 'GUID_PARENT' OF STRUCTURE <ls_huitm> TO <lv_src>.
+      IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
+        cs_chg_data-guid_parent = <lv_src>.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+
+*--------------------------------------------------------------------*
 * Hand back consumed qty/uom for the caller's 261
 *--------------------------------------------------------------------*
   cs_chg_data-consumed_qty = lv_actual_qty.
