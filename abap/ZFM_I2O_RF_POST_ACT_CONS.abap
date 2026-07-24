@@ -1157,23 +1157,50 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * POST_CONSUMPTION next, which posts the standard 261 by looking up
 * the quant directly via CS_CHG_DATA-GUID_STOCK/GUID_PARENT - it does
 * not search by material/bin. Those GUIDs were captured earlier in
-* this RF session (before this function ran), against the ORIGINAL
-* quant. The PI count + Diff Analyzer above retire that quant and
-* replace it with a new one once the counted difference posts, so the
-* original GUID_STOCK is stale by the time POST_CONSUMPTION runs -
-* confirmed via debugger: POST_CONSUMPTION_INTERNAL raised "No stock
-* matched the selection" against it. Re-resolving the stock item now,
-* after the Diff Analyzer's own posting has committed, picks up
-* whichever quant currently represents this HU/material/batch.
-* GUID_HU/GUID_LOC are left untouched - the physical HU and bin have
-* not moved, only the quant record inside them was superseded.
+* this RF session, against the ORIGINAL quant. The PI count + Diff
+* Analyzer above retire that quant and replace it with a new one once
+* the counted difference posts (confirmed via debugger and via WM
+* Monitor: the Diff Analyzer's "Goods Receipt" warehouse task, which
+* adds the reconciled quantity, posts CONFIRMED).
+*
+* An earlier version of this fix re-searched by the ORIGINAL HUIDENT
+* (LT_R_HUIDENT) and came back empty - the confirmed Goods Receipt WT
+* can land the reconciled stock on a different bin/HU than the one
+* originally scanned, not necessarily back on the same HU. Searching
+* by MATID/CHARG at the warehouse level instead of HUIDENT finds
+* wherever this material/batch currently sits, regardless of which
+* bin/HU the Diff Analyzer's own posting relocated it to. When more
+* than one stock item matches (e.g. a stale zero-quantity leftover
+* alongside the genuinely available one), prefer the first row with a
+* non-zero QUAN over whatever happens to be first in the result set.
+*
+* GUID_HU/GUID_LOC are left untouched - POST_CONSUMPTION_INTERNAL
+* still needs a valid HU/location context, and the ones captured
+* earlier in the RF session remain the ones the user physically
+* scanned; only the quant record was superseded.
 *--------------------------------------------------------------------*
   CLEAR: lt_huitm, lt_huhdr.
+
+  DATA: lt_matid_refresh TYPE /scwm/tt_matid,
+        lt_r_charg       TYPE rseloption,
+        ls_r_charg       TYPE rsdsselopt.
+
+  CLEAR lt_matid_refresh.
+  APPEND lv_matid TO lt_matid_refresh.
+
+  CLEAR lt_r_charg.
+  IF lv_charg IS NOT INITIAL.
+    ls_r_charg-sign   = 'I'.
+    ls_r_charg-option = 'EQ'.
+    ls_r_charg-low    = lv_charg.
+    APPEND ls_r_charg TO lt_r_charg.
+  ENDIF.
 
   CALL FUNCTION '/SCWM/SELECT_STOCK'
     EXPORTING
       iv_lgnum    = lv_lgnum
-      ir_huident  = lt_r_huident
+      it_matid    = lt_matid_refresh
+      ir_charg    = lt_r_charg
       iv_tolerant = abap_true
     IMPORTING
       et_huitm    = lt_huitm
@@ -1186,24 +1213,15 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     UNASSIGN <ls_huitm>.
 
     LOOP AT lt_huitm ASSIGNING <ls_huitm>.
-      lv_match = abap_true.
-
-      ASSIGN COMPONENT 'MATID' OF STRUCTURE <ls_huitm> TO <lv_src>.
-      IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL AND <lv_src> <> lv_matid.
-        lv_match = abap_false.
-      ENDIF.
-
-      IF lv_match = abap_true AND lv_batchid IS NOT INITIAL.
-        ASSIGN COMPONENT 'BATCHID' OF STRUCTURE <ls_huitm> TO <lv_src>.
-        IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL AND <lv_src> <> lv_batchid.
-          lv_match = abap_false.
-        ENDIF.
-      ENDIF.
-
-      IF lv_match = abap_true.
+      ASSIGN COMPONENT 'QUAN' OF STRUCTURE <ls_huitm> TO <lv_src>.
+      IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
         EXIT.
       ENDIF.
     ENDLOOP.
+
+    IF <ls_huitm> IS NOT ASSIGNED.
+      READ TABLE lt_huitm ASSIGNING <ls_huitm> INDEX 1.
+    ENDIF.
 
     IF <ls_huitm> IS ASSIGNED.
       ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE <ls_huitm> TO <lv_src>.
