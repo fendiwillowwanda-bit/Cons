@@ -1030,9 +1030,10 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * actually populated and different, so a row that happens not to carry
 * one of these fields is not wrongly dropped.
 *
-* LT_ASP_OI_CUM is left untouched: it aggregates at a coarser level
-* shared across all items for this material and does not need to
-* mirror this item-level filter.
+* LT_ASP_OI_CUM is left untouched here (still the full, unscoped
+* aggregate from GET_DIFFERENCES) - it is no longer passed into
+* PREPARE_POSTING_DATA at all, see the comment further down at that
+* call for why.
 *--------------------------------------------------------------------*
       CLEAR lt_asp_od_itm_scoped.
 
@@ -1086,11 +1087,29 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
       CLEAR lt_diff_post.
 
+*--------------------------------------------------------------------*
+* IT_ASP_OI_CUM is deliberately NOT passed here. Reading
+* /SCWM/CL_DIFF_ANALYZER (LUI_DIFFERENCESSPI) confirmed
+* PREPARE_POSTING_DATA branches on "IT_ASP_OI_CUM IS SUPPLIED": if
+* supplied, it takes the "posting on cumulated level" path, which
+* groups IT_ASP_OD_ITM rows by matching GUID against each
+* IT_ASP_OI_CUM entry and - once 2+ rows share a GUID (true for our
+* own pair, confirmed via debugger: both scoped rows carry the same
+* GUID) - builds an *additional* GM item straight from the cumulative
+* record itself (CONVERT_ASP_OI_CUM_2_GMITEM), which reflects the
+* material's full outstanding aggregate, not just this transaction's
+* scoped pair. LT_ASP_OI_CUM was never scoped down (only
+* LT_ASP_OD_ITM was), so that aggregate still includes every other
+* outstanding difference for the material - which is what GM_CREATE
+* was actually choking on, not a scoping gap in LT_ASP_OD_ITM itself.
+* Omitting IT_ASP_OI_CUM takes the ELSE branch ("posting on
+* difference level"), which converts only IT_ASP_OD_ITM directly -
+* exactly the two rows this transaction's own PI count produced.
+*--------------------------------------------------------------------*
       lo_diff_analyzer->prepare_posting_data(
         EXPORTING
           iv_lgnum      = lv_lgnum
           it_asp_od_itm = lt_asp_od_itm
-          it_asp_oi_cum = lt_asp_oi_cum
         IMPORTING
           et_diff_post  = lt_diff_post ).
 
