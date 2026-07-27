@@ -719,22 +719,26 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   copy_comp 'ENTITLED_ROLE' <ls_stock> 'ENTITLED_ROLE' <ls_res_stock>.
   copy_comp 'STOCK_USAGE'   <ls_stock> 'STOCK_USAGE'   <ls_res_stock>.
 
-  " Populate HU_ITEM the same way PI CREATE does (see ls_data-hu_item
-  " above) - clearing it here instead (as this used to do) drops the
-  " HU level from the posted PI document entirely: WM Monitor showed
-  " the document this function posts has only the Level 1 (L/Location)
-  " row, while a manually-posted PI document for the same kind of HU
-  " scan has both Level 1 (L) and Level 2 (H/Handling Unit) rows. With
-  " the HU level missing, the document doesn't represent the stock as
-  " sitting inside the scanned HU, which is consistent with the
-  " downstream stock-lookup failures this function has been chasing
-  " (GM 014, "no stock matched the selection", available-qty
-  " mismatches).
+  " Reverted: populating HU_ITEM here (mirroring PI CREATE, to restore
+  " the Level 2/HU row WM Monitor showed missing from the posted PI
+  " document) broke /SCWM/PI_CALL_DOCUMENT_COUNT itself - confirmed
+  " via debugger: it now rejects with message 019 "Call for item .../
+  " 000001 contains errors; parameters not transferred correctly".
+  " HU_ITEM is only a 4-field identity structure (SSCC/LGNUM_HU/
+  " HUIDENT/VHI); MOVE-CORRESPONDING <ls_huitm> only fills HUIDENT
+  " (confirmed in the debugger the rest stay blank/initial), and
+  " apparently COUNT validates this sub-structure against what CREATE
+  " already established more strictly than CREATE validates it on
+  " first write - an incomplete HU_ITEM (no VHI/SSCC) is accepted by
+  " CREATE but rejected by COUNT. The missing Level 2 row is a real,
+  " separately-confirmed cosmetic difference from a manually-posted
+  " PI document, but fixing it needs a different, more careful
+  " approach than mirroring CREATE's population blindly - clearing it
+  " here (as before) is what the Diff Analyzer/GUID-refresh fixes were
+  " already verified to work correctly against.
   ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
-    MOVE-CORRESPONDING <ls_huitm> TO <ls_hu>.
-    set_comp 'HUIDENT' <ls_hu> lv_huident.
   ENDIF.
 
   ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
