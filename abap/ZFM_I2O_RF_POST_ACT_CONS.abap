@@ -772,22 +772,21 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   copy_comp 'ENTITLED_ROLE' <ls_stock> 'ENTITLED_ROLE' <ls_res_stock>.
   copy_comp 'STOCK_USAGE'   <ls_stock> 'STOCK_USAGE'   <ls_res_stock>.
 
-  " Populate HU_ITEM the same way PI CREATE does, plus LGNUM_HU.
-  " A first attempt (MOVE-CORRESPONDING <ls_huitm> + HUIDENT only, no
-  " LGNUM_HU) broke /SCWM/PI_CALL_DOCUMENT_COUNT itself - confirmed
-  " via debugger: it rejected with message 019 "Call for item .../
-  " 000001 contains errors; parameters not transferred correctly".
-  " HU_ITEM is only a 4-field identity structure (SSCC/LGNUM_HU/
-  " HUIDENT/VHI). MOVE-CORRESPONDING <ls_huitm> TO <ls_hu> does not
-  " fill LGNUM_HU - <ls_huitm>'s warehouse field is named LGNUM, not
-  " LGNUM_HU, so MOVE-CORRESPONDING's name-based matching skips it -
-  " leaving an HU_ITEM with a real HUIDENT but no warehouse context,
-  " which CREATE tolerates (it has its own LGNUM context from
-  " ls_head_create) but COUNT apparently does not. VHI was checked via
-  " debugger and confirmed blank even on genuine /SCWM/HUHDR records
-  " for this warehouse, so it is not the missing piece. Explicitly
-  " setting LGNUM_HU here (from lv_lgnum, same as CREATE's own
-  " context) completes the identity CREATE already tolerated without.
+  " Populate HU_ITEM the same way PI CREATE does (MOVE-CORRESPONDING +
+  " HUIDENT). An earlier attempt at this alone broke
+  " /SCWM/PI_CALL_DOCUMENT_COUNT with message 019 "Call for item .../
+  " 000001 contains errors; parameters not transferred correctly" -
+  " confirmed via debugger. What actually fixes that rejection is
+  " still NOT confirmed: 'LGNUM_HU' below was a guess at a missing
+  " warehouse-context field on HU_ITEM's own structure (name assumed,
+  " never verified against this system's actual HU_ITEM field list),
+  " and has since been confirmed NOT to exist here - so this
+  " set_comp is a no-op (ASSIGN COMPONENT sets sy-subrc <> 0 and
+  " set_comp silently skips the assignment; harmless, but it is not
+  " the fix). Kept only as a placeholder until the real HU_ITEM field
+  " list is confirmed via debugger (Fld.list on <ls_hu> right after
+  " the ASSIGN COMPONENT below) and the actual missing field, if any,
+  " is identified.
   ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
@@ -798,8 +797,9 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   " Populate HU_PARENT with the outer HU (lv_hu_parent_huident,
   " resolved above from <ls_huitm>-T_PARENT) when this HU is nested
-  " inside another one. Left cleared (as before) when it isn't -
-  " matches the confirmed behavior for a plain HU-in-bin case.
+  " inside another one. Left cleared (as before) when it isn't.
+  " Same caveat as HU_ITEM above: 'LGNUM_HU' here is unverified against
+  " this system's actual HU_PARENT field list and may be a no-op.
   ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
