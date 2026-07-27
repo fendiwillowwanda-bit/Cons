@@ -80,6 +80,17 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     lt_huitm TYPE /scwm/tt_stock_select,
     lt_huhdr TYPE /scwm/tt_huhdr.
 
+  " HUIDENT of the outer HU containing the scanned HU, when this
+  " warehouse nests HUs inside HUs (confirmed via debugger:
+  " <ls_huitm>-T_PARENT lists LVL=1/TYPE=H as the scanned HU itself,
+  " LVL=2/TYPE=H as a second, outer HU containing it, LVL=3/TYPE=L as
+  " the storage bin - not just a single HU directly in a bin). Used to
+  " populate HU_PARENT below so the PI document represents the full
+  " nesting, not just the immediate HU.
+  DATA:
+    lv_hu_parent_huident TYPE /scwm/de_huident,
+    ls_huhdr_row         LIKE LINE OF lt_huhdr.
+
   DATA:
     lt_r_huident TYPE rseloption,
     ls_r_huident TYPE rsdsselopt.
@@ -142,6 +153,15 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     <ls_result>     TYPE any,
     <ls_res_data>   TYPE any,
     <ls_res_stock>  TYPE any.
+
+  " Used only to resolve the outer/parent HU from <ls_huitm>-T_PARENT
+  " (see lv_hu_parent_huident above).
+  FIELD-SYMBOLS:
+    <lt_parent>      TYPE ANY TABLE,
+    <ls_parent_row>  TYPE any,
+    <lv_parent_lvl>  TYPE any,
+    <lv_parent_type> TYPE any,
+    <lv_parent_guid> TYPE any.
 
   FIELD-SYMBOLS:
     <lv_status>     TYPE any.
@@ -457,6 +477,39 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     lv_guid_stock = <lv_src>.
   ENDIF.
 
+*--------------------------------------------------------------------*
+* Resolve the outer/parent HU (nested HU-in-HU) for HU_PARENT below.
+* LT_HUHDR (from the same /SCWM/SELECT_STOCK call above) already
+* carries the header for both HU levels, so the outer HU's HUIDENT is
+* looked up here by GUID rather than queried again. Left blank
+* (lv_hu_parent_huident stays initial) when this HU isn't nested
+* inside another one - HU_PARENT is only populated below if this
+* found something.
+*--------------------------------------------------------------------*
+  CLEAR lv_hu_parent_huident.
+
+  ASSIGN COMPONENT 'T_PARENT' OF STRUCTURE <ls_huitm> TO <lt_parent>.
+  IF sy-subrc = 0.
+    LOOP AT <lt_parent> ASSIGNING <ls_parent_row>.
+      UNASSIGN: <lv_parent_lvl>, <lv_parent_type>, <lv_parent_guid>.
+
+      ASSIGN COMPONENT 'LVL'  OF STRUCTURE <ls_parent_row> TO <lv_parent_lvl>.
+      ASSIGN COMPONENT 'TYPE' OF STRUCTURE <ls_parent_row> TO <lv_parent_type>.
+      ASSIGN COMPONENT 'GUID' OF STRUCTURE <ls_parent_row> TO <lv_parent_guid>.
+
+      CHECK <lv_parent_lvl> IS ASSIGNED AND <lv_parent_lvl> = 2
+        AND <lv_parent_type> IS ASSIGNED AND <lv_parent_type> = 'H'
+        AND <lv_parent_guid> IS ASSIGNED.
+
+      READ TABLE lt_huhdr INTO ls_huhdr_row WITH KEY guid_hu = <lv_parent_guid>.
+      IF sy-subrc = 0.
+        lv_hu_parent_huident = ls_huhdr_row-huident.
+      ENDIF.
+
+      EXIT.
+    ENDLOOP.
+  ENDIF.
+
   IF lv_matid IS INITIAL.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
@@ -743,9 +796,17 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     set_comp 'LGNUM_HU'  <ls_hu> lv_lgnum.
   ENDIF.
 
+  " Populate HU_PARENT with the outer HU (lv_hu_parent_huident,
+  " resolved above from <ls_huitm>-T_PARENT) when this HU is nested
+  " inside another one. Left cleared (as before) when it isn't -
+  " matches the confirmed behavior for a plain HU-in-bin case.
   ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
+    IF lv_hu_parent_huident IS NOT INITIAL.
+      set_comp 'HUIDENT'  <ls_hu> lv_hu_parent_huident.
+      set_comp 'LGNUM_HU' <ls_hu> lv_lgnum.
+    ENDIF.
   ENDIF.
 
   ASSIGN COMPONENT 'T_QUAN' OF STRUCTURE <ls_cnt_res> TO <lt_cnt_quan>.
