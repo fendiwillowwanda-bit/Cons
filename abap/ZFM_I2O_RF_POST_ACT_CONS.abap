@@ -719,9 +719,22 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   copy_comp 'ENTITLED_ROLE' <ls_stock> 'ENTITLED_ROLE' <ls_res_stock>.
   copy_comp 'STOCK_USAGE'   <ls_stock> 'STOCK_USAGE'   <ls_res_stock>.
 
+  " Populate HU_ITEM the same way PI CREATE does (see ls_data-hu_item
+  " above) - clearing it here instead (as this used to do) drops the
+  " HU level from the posted PI document entirely: WM Monitor showed
+  " the document this function posts has only the Level 1 (L/Location)
+  " row, while a manually-posted PI document for the same kind of HU
+  " scan has both Level 1 (L) and Level 2 (H/Handling Unit) rows. With
+  " the HU level missing, the document doesn't represent the stock as
+  " sitting inside the scanned HU, which is consistent with the
+  " downstream stock-lookup failures this function has been chasing
+  " (GM 014, "no stock matched the selection", available-qty
+  " mismatches).
   ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
+    MOVE-CORRESPONDING <ls_huitm> TO <ls_hu>.
+    set_comp 'HUIDENT' <ls_hu> lv_huident.
   ENDIF.
 
   ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
