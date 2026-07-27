@@ -772,21 +772,23 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   copy_comp 'ENTITLED_ROLE' <ls_stock> 'ENTITLED_ROLE' <ls_res_stock>.
   copy_comp 'STOCK_USAGE'   <ls_stock> 'STOCK_USAGE'   <ls_res_stock>.
 
-  " Populate HU_ITEM the same way PI CREATE does (MOVE-CORRESPONDING +
-  " HUIDENT). An earlier attempt at this alone broke
+  " Populate HU_ITEM the same way PI CREATE does, plus LGNUM_HU.
+  " An earlier attempt at this without LGNUM_HU broke
   " /SCWM/PI_CALL_DOCUMENT_COUNT with message 019 "Call for item .../
   " 000001 contains errors; parameters not transferred correctly" -
-  " confirmed via debugger. What actually fixes that rejection is
-  " still NOT confirmed: 'LGNUM_HU' below was a guess at a missing
-  " warehouse-context field on HU_ITEM's own structure (name assumed,
-  " never verified against this system's actual HU_ITEM field list),
-  " and has since been confirmed NOT to exist here - so this
-  " set_comp is a no-op (ASSIGN COMPONENT sets sy-subrc <> 0 and
-  " set_comp silently skips the assignment; harmless, but it is not
-  " the fix). Kept only as a placeholder until the real HU_ITEM field
-  " list is confirmed via debugger (Fld.list on <ls_hu> right after
-  " the ASSIGN COMPONENT below) and the actual missing field, if any,
-  " is identified.
+  " confirmed via debugger. HU_ITEM's real field list is now confirmed
+  " via debugger Fld.list on <ls_hu> (SAPLZFG_I2O_RF_MFG_CON breakpoint,
+  " PI CREATE's own HU_ITEM assignment): exactly 4 fields - SSCC
+  " (/LIME/SSCC), LGNUM_HU (/SCWM/LGNUM), HUIDENT (/SCWM/DE_HUIDENT),
+  " VHI (/SCWM/VHI) - so LGNUM_HU is real, not a guess. The same
+  " debugger check showed PI CREATE leaves LGNUM_HU blank (its
+  " MOVE-CORRESPONDING <ls_huitm> TO <ls_hu> does not fill it, since
+  " <ls_huitm>'s own warehouse field is named LGNUM, not LGNUM_HU, so
+  " MOVE-CORRESPONDING's name-based matching skips it) - CREATE
+  " tolerates that gap (it has its own LGNUM context from
+  " ls_head_create) but COUNT apparently does not. Explicitly setting
+  " LGNUM_HU here (from lv_lgnum, same as CREATE's own context)
+  " completes the identity CREATE already tolerated without it.
   ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
@@ -798,8 +800,8 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   " Populate HU_PARENT with the outer HU (lv_hu_parent_huident,
   " resolved above from <ls_huitm>-T_PARENT) when this HU is nested
   " inside another one. Left cleared (as before) when it isn't.
-  " Same caveat as HU_ITEM above: 'LGNUM_HU' here is unverified against
-  " this system's actual HU_PARENT field list and may be a no-op.
+  " HU_PARENT is the same 4-field structure type as HU_ITEM above
+  " (confirmed via debugger), so LGNUM_HU applies here too.
   ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
