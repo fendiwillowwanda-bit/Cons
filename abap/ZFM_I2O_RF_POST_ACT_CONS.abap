@@ -719,26 +719,28 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   copy_comp 'ENTITLED_ROLE' <ls_stock> 'ENTITLED_ROLE' <ls_res_stock>.
   copy_comp 'STOCK_USAGE'   <ls_stock> 'STOCK_USAGE'   <ls_res_stock>.
 
-  " Reverted: populating HU_ITEM here (mirroring PI CREATE, to restore
-  " the Level 2/HU row WM Monitor showed missing from the posted PI
-  " document) broke /SCWM/PI_CALL_DOCUMENT_COUNT itself - confirmed
-  " via debugger: it now rejects with message 019 "Call for item .../
+  " Populate HU_ITEM the same way PI CREATE does, plus LGNUM_HU.
+  " A first attempt (MOVE-CORRESPONDING <ls_huitm> + HUIDENT only, no
+  " LGNUM_HU) broke /SCWM/PI_CALL_DOCUMENT_COUNT itself - confirmed
+  " via debugger: it rejected with message 019 "Call for item .../
   " 000001 contains errors; parameters not transferred correctly".
   " HU_ITEM is only a 4-field identity structure (SSCC/LGNUM_HU/
-  " HUIDENT/VHI); MOVE-CORRESPONDING <ls_huitm> only fills HUIDENT
-  " (confirmed in the debugger the rest stay blank/initial), and
-  " apparently COUNT validates this sub-structure against what CREATE
-  " already established more strictly than CREATE validates it on
-  " first write - an incomplete HU_ITEM (no VHI/SSCC) is accepted by
-  " CREATE but rejected by COUNT. The missing Level 2 row is a real,
-  " separately-confirmed cosmetic difference from a manually-posted
-  " PI document, but fixing it needs a different, more careful
-  " approach than mirroring CREATE's population blindly - clearing it
-  " here (as before) is what the Diff Analyzer/GUID-refresh fixes were
-  " already verified to work correctly against.
+  " HUIDENT/VHI). MOVE-CORRESPONDING <ls_huitm> TO <ls_hu> does not
+  " fill LGNUM_HU - <ls_huitm>'s warehouse field is named LGNUM, not
+  " LGNUM_HU, so MOVE-CORRESPONDING's name-based matching skips it -
+  " leaving an HU_ITEM with a real HUIDENT but no warehouse context,
+  " which CREATE tolerates (it has its own LGNUM context from
+  " ls_head_create) but COUNT apparently does not. VHI was checked via
+  " debugger and confirmed blank even on genuine /SCWM/HUHDR records
+  " for this warehouse, so it is not the missing piece. Explicitly
+  " setting LGNUM_HU here (from lv_lgnum, same as CREATE's own
+  " context) completes the identity CREATE already tolerated without.
   ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_res_data> TO <ls_hu>.
   IF sy-subrc = 0.
     CLEAR <ls_hu>.
+    MOVE-CORRESPONDING <ls_huitm> TO <ls_hu>.
+    set_comp 'HUIDENT'   <ls_hu> lv_huident.
+    set_comp 'LGNUM_HU'  <ls_hu> lv_lgnum.
   ENDIF.
 
   ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
