@@ -641,6 +641,17 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   set_comp 'COUNT_DATE'   <ls_data> sy-datum.
   set_comp 'ACTIVE'       <ls_data> limpi_doc_active.
 
+*--------------------------------------------------------------------*
+* Mark this as a stock-level item (item cat S) - matches the level
+* where the standard flow shows Cat/DocCat.Txt/Stock Ref./StkRef.Itm
+* (PWR/"Production Material Request"/doc/item) populated. PI CREATE
+* never stated this before, unlike the later PI COUNT step which
+* explicitly sets TYPE_ITEM = 'S' on the stock row - the missing
+* classification here may be why the PMR/STOCK_DOCCAT enrichment
+* never triggered for our document.
+*--------------------------------------------------------------------*
+  set_comp 'TYPE_ITEM'   <ls_data> 'S'.
+
   UNASSIGN <ls_stock>.
 
   ASSIGN COMPONENT 'STOCK_ITEM' OF STRUCTURE <ls_data> TO <ls_stock>.
