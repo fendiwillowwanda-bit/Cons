@@ -15,44 +15,39 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     lc_shrt TYPE /scwm/de_reason VALUE 'SHRT'.
 
   DATA:
-    lv_lgnum      TYPE /scwm/lgnum,
-    lv_reason     TYPE /scwm/de_reason,
-    lv_pi_reason  TYPE /lime/pi_reason,
-    lv_actual_qty TYPE /scwm/de_quantity,
-    lv_plan_qty   TYPE /scwm/de_quantity,
-    lv_diff_qty   TYPE /scwm/de_quantity,
-    lv_abs_diff   TYPE /scwm/de_quantity,
-    lv_tol_pct    TYPE decfloat34,
-    lv_tol_qty    TYPE /scwm/de_quantity,
-    lv_proc_type  TYPE /lime/pi_process_type,
-    lv_doc_type   TYPE /lime/pi_document_type,
-    lv_pi_area    TYPE /lime/pi_de_pi_aread,
-    lv_pval02     TYPE ztxca_config-pval02,
-    lv_severity   TYPE bapi_mtype,
-    lv_huident    TYPE /scwm/de_huident,
-    lv_matnr      TYPE /scwm/de_matnr,
-    lv_charg      TYPE /scwm/de_charg,
-    lv_matid      TYPE /scwm/de_matid,
-    lv_batchid    TYPE /scwm/de_batchid,
-    lv_lgpla      TYPE /scwm/lgpla,
-    lv_lgtyp      TYPE /scwm/lgtyp,
-    lv_match      TYPE abap_bool,
-    lv_recount    TYPE abap_bool.
+    lv_lgnum       TYPE /scwm/lgnum,
+    lv_reason      TYPE /scwm/de_reason,
+    lv_pi_reason   TYPE /lime/pi_reason,
+    lv_actual_qty  TYPE /scwm/de_quantity,
+    lv_plan_qty    TYPE /scwm/de_quantity,
+    lv_diff_qty    TYPE /scwm/de_quantity,
+    lv_abs_diff    TYPE /scwm/de_quantity,
+    lv_tol_pct     TYPE decfloat34,
+    lv_tol_qty     TYPE /scwm/de_quantity,
+    lv_proc_type   TYPE /lime/pi_process_type,
+    lv_doc_type    TYPE /lime/pi_document_type,
+    lv_pi_area     TYPE /lime/pi_de_pi_aread,
+    lv_pval02      TYPE ztxca_config-pval02,
+    lv_severity    TYPE bapi_mtype,
+    lv_huident     TYPE /scwm/de_huident,
+    lv_matnr       TYPE /scwm/de_matnr,
+    lv_charg       TYPE /scwm/de_charg,
+    lv_matid       TYPE /scwm/de_matid,
+    lv_batchid     TYPE /scwm/de_batchid,
+    lv_lgpla       TYPE /scwm/lgpla,
+    lv_lgtyp       TYPE /scwm/lgtyp,
+    lv_qdocid      TYPE /scwm/de_docid,
+    lv_match       TYPE abap_bool,
+    lv_recount     TYPE abap_bool,
+    lv_stock_found TYPE abap_bool.
 
-  " Identifies the exact quant this transaction resolved via
-  " /SCWM/SELECT_STOCK, so the Diff Analyzer step below can be scoped
-  " to just this stock item instead of every outstanding difference
-  " for the material (see GUID_STOCK usage further down).
   DATA:
-    lv_guid_stock TYPE x LENGTH 16.
-
-  " Order/component material that this consumption step is bound to.
-  " Used to validate the material resolved from the scanned HU is
-  " actually the BOM component of the Process Order (FDS error
-  " condition: "Material identified is not included in the BOM of
-  " the Process Order").
-  DATA:
+    lv_guid_stock  TYPE x LENGTH 16,
     lv_order_matid TYPE /scwm/de_matid.
+
+  DATA:
+    lv_guid_hu     TYPE /scwm/guid_hu,
+    lv_guid_parent TYPE /scwm/guid_hu.
 
   DATA:
     ls_head_create TYPE /lime/pi_head_create,
@@ -181,11 +176,6 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   IF is_screen_data-consumed_qty IS NOT INITIAL.
     lv_plan_qty = is_screen_data-consumed_qty.
   ELSEIF cs_chg_data-qty_int IS NOT INITIAL.
-    " ConsQ is mandatorily blank whenever ActQ is used (mutual
-    " exclusion enforced in ZFM_I2O_RF_MICOTR_MIQUSL_PAI), so this is
-    " the normal path: qty_int carries the system-suggested/nominal
-    " component quantity forward from PBO independently of the
-    " ConsQ screen field the user cleared.
     lv_plan_qty = cs_chg_data-qty_int.
   ENDIF.
 
@@ -213,7 +203,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
 *--------------------------------------------------------------------*
-* Get tolerance from BRF+ (one row per warehouse - ZDT_CON_TOLERANCE)
+* Get tolerance from BRF+
 *--------------------------------------------------------------------*
   CLEAR: lt_tol, ls_tol.
 
@@ -223,9 +213,6 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     IMPORTING
       et_result = lt_tol ).
 
-  " zsi2o_brf_con_tolerance has no LGNUM component - get_con_tolerance
-  " already scopes the result to iv_lgnum, so the first (and expected
-  " only) row is the tolerance row for this warehouse.
   READ TABLE lt_tol INTO ls_tol INDEX 1.
   IF sy-subrc <> 0.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
@@ -341,14 +328,28 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 *--------------------------------------------------------------------*
 * Get HU
 *--------------------------------------------------------------------*
+  CLEAR: lv_huident, lv_matnr, lv_charg,
+         lt_r_huident, ls_r_huident,
+         lt_huitm, lt_huhdr.
+
+  UNASSIGN <lv_src>.
+
   ASSIGN COMPONENT 'HUIDENT' OF STRUCTURE cs_chg_data TO <lv_src>.
-  IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
     lv_huident = <lv_src>.
   ENDIF.
 
   IF lv_huident IS INITIAL.
+    UNASSIGN <lv_src>.
+
     ASSIGN COMPONENT 'HUIDENT' OF STRUCTURE is_static_data TO <lv_src>.
-    IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
+
+    IF sy-subrc = 0
+       AND <lv_src> IS ASSIGNED
+       AND <lv_src> IS NOT INITIAL.
       lv_huident = <lv_src>.
     ENDIF.
   ENDIF.
@@ -358,6 +359,7 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
   lv_matnr = is_screen_data-matnr_ean.
+
   CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
     EXPORTING
       input  = lv_matnr
@@ -383,7 +385,8 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       error       = 1
       OTHERS      = 2.
 
-  IF sy-subrc <> 0 OR lt_huitm IS INITIAL.
+  IF sy-subrc <> 0
+     OR lt_huitm IS INITIAL.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
@@ -396,20 +399,12 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     lv_order_matid = <lv_src>.
   ENDIF.
 
-  " batch-matid is used elsewhere in the existing code
-  " (ZFM_I2O_RF_MICOTR_MIQUSL_PAI's /SCWM/MATERIAL_QUAN_CONVERT call),
-  " so it is a known-safe static component - unlike mat_global-matid,
-  " which was never proven to exist and was dropped after LGNUM turned
-  " out to be a guess that didn't compile.
   IF lv_order_matid IS INITIAL AND cs_chg_data-batch-matid IS NOT INITIAL.
     lv_order_matid = cs_chg_data-batch-matid.
   ENDIF.
 
   UNASSIGN <ls_huitm>.
 
-  " Match the HU item on BOTH material and batch - matching on batch
-  " alone (as before) could silently pick a different material's
-  " stock item on a mixed HU.
   LOOP AT lt_huitm ASSIGNING <ls_huitm>.
     lv_match = abap_true.
 
@@ -462,28 +457,121 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   ENDIF.
 
 *--------------------------------------------------------------------*
+* Validate PMR assignment for Single-Order Staging
+*--------------------------------------------------------------------*
+  IF cs_chg_data-qitmid IS INITIAL.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+  UNASSIGN <lv_src>.
+
+  ASSIGN COMPONENT 'QITMID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+  IF sy-subrc <> 0
+     OR <lv_src> IS NOT ASSIGNED
+     OR <lv_src> IS INITIAL
+     OR <lv_src> <> cs_chg_data-qitmid.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Preserve PMR document assignment for Single-Order Staging
+*--------------------------------------------------------------------*
+  CLEAR lv_qdocid.
+  UNASSIGN <lv_src>.
+
+  ASSIGN COMPONENT 'QDOCID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+  IF sy-subrc <> 0
+     OR <lv_src> IS NOT ASSIGNED
+     OR <lv_src> IS INITIAL.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+  lv_qdocid = <lv_src>.
+
+*--------------------------------------------------------------------*
 * BOM validation - the resolved material must be the component
 * bound to this order's reservation
 *--------------------------------------------------------------------*
-  IF lv_order_matid IS NOT INITIAL AND lv_order_matid <> lv_matid.
+  IF lv_order_matid IS NOT INITIAL
+     AND lv_order_matid <> lv_matid.
     MESSAGE e051(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
-  READ TABLE lt_huhdr ASSIGNING <ls_huhdr> INDEX 1.
+  UNASSIGN <ls_huhdr>.
+
+  READ TABLE lt_huhdr ASSIGNING <ls_huhdr>
+    WITH KEY huident = lv_huident.
+
+  IF sy-subrc <> 0
+     OR <ls_huhdr> IS NOT ASSIGNED.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Determine HU technical identifiers
+*--------------------------------------------------------------------*
+  CLEAR: lv_guid_hu, lv_guid_parent.
+
+  UNASSIGN <lv_src>.
+
+  ASSIGN COMPONENT 'GUID_HU' OF STRUCTURE <ls_huhdr> TO <lv_src>.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
+    lv_guid_hu = <lv_src>.
+  ENDIF.
+
+  UNASSIGN <lv_src>.
+
+  ASSIGN COMPONENT 'GUID_PARENT' OF STRUCTURE <ls_huhdr> TO <lv_src>.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
+    lv_guid_parent = <lv_src>.
+  ENDIF.
+
+  IF lv_guid_hu IS INITIAL.
+    UNASSIGN <lv_src>.
+
+    ASSIGN COMPONENT 'GUID_PARENT' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+    IF sy-subrc = 0
+       AND <lv_src> IS ASSIGNED
+       AND <lv_src> IS NOT INITIAL.
+      lv_guid_hu = <lv_src>.
+    ENDIF.
+  ENDIF.
+
+  IF lv_guid_hu IS INITIAL.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
 
 *--------------------------------------------------------------------*
 * Determine storage bin
 *--------------------------------------------------------------------*
   CLEAR lv_lgpla.
+  UNASSIGN <lv_src>.
 
   ASSIGN COMPONENT 'LGPLA' OF STRUCTURE <ls_huitm> TO <lv_src>.
-  IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
     lv_lgpla = <lv_src>.
   ENDIF.
 
-  IF lv_lgpla IS INITIAL AND <ls_huhdr> IS ASSIGNED.
+  IF lv_lgpla IS INITIAL.
+    UNASSIGN <lv_src>.
+
     ASSIGN COMPONENT 'LGPLA' OF STRUCTURE <ls_huhdr> TO <lv_src>.
-    IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
+
+    IF sy-subrc = 0
+       AND <lv_src> IS ASSIGNED
+       AND <lv_src> IS NOT INITIAL.
       lv_lgpla = <lv_src>.
     ENDIF.
   ENDIF.
@@ -496,9 +584,13 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * Determine storage type
 *--------------------------------------------------------------------*
   CLEAR lv_lgtyp.
+  UNASSIGN <lv_src>.
 
   ASSIGN COMPONENT 'LGTYP' OF STRUCTURE <ls_huitm> TO <lv_src>.
-  IF sy-subrc = 0 AND <lv_src> IS NOT INITIAL.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
     lv_lgtyp = <lv_src>.
   ENDIF.
 
@@ -506,15 +598,13 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     SELECT SINGLE lgtyp
       FROM /scwm/lagp
       INTO @lv_lgtyp
-     WHERE lgnum = @lv_lgnum
-       AND lgpla = @lv_lgpla.
+      WHERE lgnum = @lv_lgnum
+        AND lgpla = @lv_lgpla.
   ENDIF.
 
   IF lv_lgtyp IS INITIAL.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
-
-  DATA: ls_lagp TYPE /scwm/lagp.
 
 *--------------------------------------------------------------------*
 * PI CREATE header
@@ -530,9 +620,12 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 * PI CREATE item
 *--------------------------------------------------------------------*
   CLEAR ls_item_create.
+  UNASSIGN <ls_data>.
 
   ASSIGN COMPONENT 'DATA' OF STRUCTURE ls_item_create TO <ls_data>.
-  IF sy-subrc <> 0.
+
+  IF sy-subrc <> 0
+     OR <ls_data> IS NOT ASSIGNED.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
@@ -542,12 +635,18 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   set_comp 'PROCESS_TYPE' <ls_data> lv_proc_type.
   set_comp 'DOC_TYPE'     <ls_data> lv_doc_type.
   set_comp 'PI_AREA_UI'   <ls_data> lv_pi_area.
+  set_comp 'QDOCID'       <ls_data> lv_qdocid.
+  set_comp 'QITMID'       <ls_data> cs_chg_data-qitmid.
   set_comp 'REASON'       <ls_data> lv_pi_reason.
   set_comp 'COUNT_DATE'   <ls_data> sy-datum.
   set_comp 'ACTIVE'       <ls_data> limpi_doc_active.
 
+  UNASSIGN <ls_stock>.
+
   ASSIGN COMPONENT 'STOCK_ITEM' OF STRUCTURE <ls_data> TO <ls_stock>.
-  IF sy-subrc <> 0.
+
+  IF sy-subrc <> 0
+     OR <ls_stock> IS NOT ASSIGNED.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
@@ -566,27 +665,65 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   copy_comp 'STOCK_DOCCAT'  <ls_huitm> 'STOCK_DOCCAT'  <ls_stock>.
   copy_comp 'STOCK_DOCNO'   <ls_huitm> 'STOCK_DOCNO'   <ls_stock>.
   copy_comp 'STOCK_ITMNO'   <ls_huitm> 'STOCK_ITMNO'   <ls_stock>.
-  copy_comp 'VFDAT'         <ls_huitm> 'VFDAT'         <ls_stock>.
-  copy_comp 'WDATU'         <ls_huitm> 'WDATU'         <ls_stock>.
-  copy_comp 'COO'           <ls_huitm> 'COO'           <ls_stock>.
 
-  set_comp 'LGNUM_STOCK'    <ls_stock> lv_lgnum.
+*--------------------------------------------------------------------*
+* Preserve PMR document and item assignment for Single-Order Staging
+*--------------------------------------------------------------------*
+  copy_comp 'QDOCID' <ls_huitm> 'QDOCID' <ls_stock>.
+  copy_comp 'QITMID' <ls_huitm> 'QITMID' <ls_stock>.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'QDOCID' OF STRUCTURE <ls_stock> TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED
+     AND <lv_comp> IS INITIAL.
+    <lv_comp> = lv_qdocid.
+  ENDIF.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'QITMID' OF STRUCTURE <ls_stock> TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED
+     AND <lv_comp> IS INITIAL.
+    <lv_comp> = cs_chg_data-qitmid.
+  ENDIF.
+
+  copy_comp 'VFDAT' <ls_huitm> 'VFDAT' <ls_stock>.
+  copy_comp 'WDATU' <ls_huitm> 'WDATU' <ls_stock>.
+  copy_comp 'COO'   <ls_huitm> 'COO'   <ls_stock>.
+
+  set_comp 'LGNUM_STOCK' <ls_stock> lv_lgnum.
 
 *--------------------------------------------------------------------*
 * Mandatory HU item
 *--------------------------------------------------------------------*
+  UNASSIGN <ls_hu>.
+
   ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_data> TO <ls_hu>.
-  IF sy-subrc = 0.
+
+  IF sy-subrc = 0
+     AND <ls_hu> IS ASSIGNED.
     MOVE-CORRESPONDING <ls_huitm> TO <ls_hu>.
+
+    set_comp 'GUID_HU' <ls_hu> lv_guid_hu.
     set_comp 'HUIDENT' <ls_hu> lv_huident.
   ENDIF.
 
 *--------------------------------------------------------------------*
 * Mandatory location parent
 *--------------------------------------------------------------------*
+  UNASSIGN <ls_loc_parent>.
+
   ASSIGN COMPONENT 'LOC_PARENT' OF STRUCTURE <ls_data> TO <ls_loc_parent>.
-  IF sy-subrc = 0.
+
+  IF sy-subrc = 0
+     AND <ls_loc_parent> IS ASSIGNED.
     set_comp 'LGNUM' <ls_loc_parent> lv_lgnum.
+    set_comp 'LGTYP' <ls_loc_parent> lv_lgtyp.
     set_comp 'LGPLA' <ls_loc_parent> lv_lgpla.
   ENDIF.
 
@@ -617,30 +754,30 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       e_rc_severity = lv_severity.
 
   IF lv_severity CA wmegc_severity_eax.
-    READ TABLE lt_bapiret INTO ls_bapiret WITH KEY type = 'E'.
+    READ TABLE lt_bapiret INTO ls_bapiret
+      WITH KEY type = 'E'.
+
     IF sy-subrc = 0.
-      MESSAGE ID ls_bapiret-id TYPE 'E' NUMBER ls_bapiret-number
-        WITH ls_bapiret-message_v1 ls_bapiret-message_v2
-             ls_bapiret-message_v3 ls_bapiret-message_v4
+      MESSAGE ID ls_bapiret-id TYPE 'E'
+        NUMBER ls_bapiret-number
+        WITH ls_bapiret-message_v1
+             ls_bapiret-message_v2
+             ls_bapiret-message_v3
+             ls_bapiret-message_v4
         RAISING error.
     ENDIF.
+
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   READ TABLE lt_pi_doc INTO ls_pi_doc INDEX 1.
+
   IF sy-subrc <> 0.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
 *--------------------------------------------------------------------*
 * PI COUNT
-* NOTE: the commit below is required, not optional bookkeeping - the
-* recount follow-up document created by /SCWM/PI_CALL_DOCUMENT_COUNT
-* is only visible to /SCWM/PI_CALL_DOCUMENT_READ_SI once the count
-* has actually been committed (SAP processes the recount creation in
-* the update task). Every step below still raises `error` on failure,
-* so a failure here stops the flow before the caller ever posts the
-* standard 261 consumption.
 *--------------------------------------------------------------------*
   COMMIT WORK AND WAIT.
 
@@ -666,11 +803,18 @@ FUNCTION zfm_i2o_rf_post_act_cons.
     ls_item_count-post_item,
     ls_item_count-t_item_result.
 
+*--------------------------------------------------------------------*
+* Level 1 - Location to HU
+*--------------------------------------------------------------------*
   APPEND INITIAL LINE TO ls_item_count-t_item_result
     ASSIGNING <ls_cnt_res>.
 
+  UNASSIGN <ls_res_data>.
+
   ASSIGN COMPONENT 'DATA' OF STRUCTURE <ls_cnt_res> TO <ls_res_data>.
-  IF sy-subrc <> 0.
+
+  IF sy-subrc <> 0
+     OR <ls_res_data> IS NOT ASSIGNED.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
@@ -686,65 +830,216 @@ FUNCTION zfm_i2o_rf_post_act_cons.
   set_comp 'REASON'       <ls_res_data> lv_pi_reason.
   set_comp 'COUNT_DATE'   <ls_res_data> lv_count_ts.
 
-  set_comp 'LVL'          <ls_res_data> 1.
-  set_comp 'LINE_IDX'     <ls_res_data> 1.
-  set_comp 'TYPE_PARENT'  <ls_res_data> 'L'.
-  set_comp 'TYPE_ITEM'    <ls_res_data> 'S'.
+  set_comp 'LVL'         <ls_res_data> 1.
+  set_comp 'LINE_IDX'    <ls_res_data> 1.
+  set_comp 'TYPE_PARENT' <ls_res_data> 'L'.
+  set_comp 'TYPE_ITEM'   <ls_res_data> 'H'.
+  set_comp 'QDOCID'      <ls_res_data> lv_qdocid.
+  set_comp 'QITMID'      <ls_res_data> cs_chg_data-qitmid.
+
+*--------------------------------------------------------------------*
+* Level 1 parent location
+*--------------------------------------------------------------------*
+  UNASSIGN <ls_loc_parent>.
 
   ASSIGN COMPONENT 'LOC_PARENT' OF STRUCTURE <ls_res_data> TO <ls_loc_parent>.
-  IF sy-subrc = 0.
+
+  IF sy-subrc = 0
+     AND <ls_loc_parent> IS ASSIGNED.
     CLEAR <ls_loc_parent>.
+
     set_comp 'LGNUM' <ls_loc_parent> lv_lgnum.
     set_comp 'LGTYP' <ls_loc_parent> lv_lgtyp.
     set_comp 'LGPLA' <ls_loc_parent> lv_lgpla.
   ENDIF.
 
+*--------------------------------------------------------------------*
+* Level 1 HU item
+*--------------------------------------------------------------------*
+  UNASSIGN <ls_hu>.
+
+  ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_res_data> TO <ls_hu>.
+
+  IF sy-subrc <> 0
+     OR <ls_hu> IS NOT ASSIGNED.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+  CLEAR <ls_hu>.
+
+  set_comp 'GUID_HU'     <ls_hu> lv_guid_hu.
+  set_comp 'GUID_PARENT' <ls_hu> lv_guid_parent.
+  set_comp 'HUIDENT'     <ls_hu> lv_huident.
+  set_comp 'LGNUM'       <ls_hu> lv_lgnum.
+  set_comp 'LGTYP'       <ls_hu> lv_lgtyp.
+  set_comp 'LGPLA'       <ls_hu> lv_lgpla.
+
+  copy_comp 'PMAT_GUID' <ls_huhdr> 'PMAT_GUID' <ls_hu>.
+  copy_comp 'PMAT'      <ls_huhdr> 'PMAT'      <ls_hu>.
+  copy_comp 'LETYP'     <ls_huhdr> 'LETYP'     <ls_hu>.
+  copy_comp 'HUTYP'     <ls_huhdr> 'HUTYP'     <ls_hu>.
+
+*--------------------------------------------------------------------*
+* No count quantity on HU parent row
+*--------------------------------------------------------------------*
+  UNASSIGN <lt_cnt_quan>.
+
+  ASSIGN COMPONENT 'T_QUAN' OF STRUCTURE <ls_cnt_res> TO <lt_cnt_quan>.
+
+  IF sy-subrc = 0
+     AND <lt_cnt_quan> IS ASSIGNED.
+    CLEAR <lt_cnt_quan>.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Level 2 - HU to stock
+*--------------------------------------------------------------------*
+  APPEND INITIAL LINE TO ls_item_count-t_item_result
+    ASSIGNING <ls_cnt_res>.
+
+  UNASSIGN <ls_res_data>.
+
+  ASSIGN COMPONENT 'DATA' OF STRUCTURE <ls_cnt_res> TO <ls_res_data>.
+
+  IF sy-subrc <> 0
+     OR <ls_res_data> IS NOT ASSIGNED.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+  CLEAR <ls_res_data>.
+
+  set_comp 'DOC_NUMBER'   <ls_res_data> ls_pi_doc-doc_number.
+  set_comp 'DOC_YEAR'     <ls_res_data> ls_pi_doc-doc_year.
+  set_comp 'ITEM_NO'      <ls_res_data> ls_pi_doc-item_no.
+  set_comp 'PROCESS_TYPE' <ls_res_data> lv_proc_type.
+  set_comp 'LGNUM'        <ls_res_data> lv_lgnum.
+  set_comp 'DOC_TYPE'     <ls_res_data> lv_doc_type.
+  set_comp 'PI_AREA_UI'   <ls_res_data> lv_pi_area.
+  set_comp 'REASON'       <ls_res_data> lv_pi_reason.
+  set_comp 'COUNT_DATE'   <ls_res_data> lv_count_ts.
+
+  set_comp 'LVL'         <ls_res_data> 2.
+  set_comp 'LINE_IDX'    <ls_res_data> 2.
+  set_comp 'TYPE_PARENT' <ls_res_data> 'H'.
+  set_comp 'TYPE_ITEM'   <ls_res_data> 'S'.
+  set_comp 'QDOCID'      <ls_res_data> lv_qdocid.
+  set_comp 'QITMID'      <ls_res_data> cs_chg_data-qitmid.
+
+*--------------------------------------------------------------------*
+* Level 2 parent HU
+*--------------------------------------------------------------------*
+  UNASSIGN <ls_hu>.
+
+  ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
+
+  IF sy-subrc <> 0
+     OR <ls_hu> IS NOT ASSIGNED.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+  CLEAR <ls_hu>.
+
+  set_comp 'GUID_HU'     <ls_hu> lv_guid_hu.
+  set_comp 'GUID_PARENT' <ls_hu> lv_guid_parent.
+  set_comp 'HUIDENT'     <ls_hu> lv_huident.
+  set_comp 'LGNUM'       <ls_hu> lv_lgnum.
+  set_comp 'LGTYP'       <ls_hu> lv_lgtyp.
+  set_comp 'LGPLA'       <ls_hu> lv_lgpla.
+
+  copy_comp 'PMAT_GUID' <ls_huhdr> 'PMAT_GUID' <ls_hu>.
+  copy_comp 'PMAT'      <ls_huhdr> 'PMAT'      <ls_hu>.
+  copy_comp 'LETYP'     <ls_huhdr> 'LETYP'     <ls_hu>.
+  copy_comp 'HUTYP'     <ls_huhdr> 'HUTYP'     <ls_hu>.
+
+*--------------------------------------------------------------------*
+* Level 2 stock item
+*--------------------------------------------------------------------*
+  UNASSIGN <ls_res_stock>.
+
   ASSIGN COMPONENT 'STOCK_ITEM' OF STRUCTURE <ls_res_data> TO <ls_res_stock>.
-  IF sy-subrc <> 0.
+
+  IF sy-subrc <> 0
+     OR <ls_res_stock> IS NOT ASSIGNED.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR <ls_res_stock>.
-  MOVE-CORRESPONDING <ls_stock> TO <ls_res_stock>.
+  MOVE-CORRESPONDING <ls_huitm> TO <ls_res_stock>.
 
-  set_comp 'MATID'         <ls_res_stock> lv_matid.
-  set_comp 'BATCHID'       <ls_res_stock> lv_batchid.
-  set_comp 'MATNR'         <ls_res_stock> lv_matnr.
-  set_comp 'CHARG'         <ls_res_stock> lv_charg.
-  set_comp 'LGNUM_STOCK'   <ls_res_stock> lv_lgnum.
-  copy_comp 'CAT'           <ls_stock> 'CAT'           <ls_res_stock>.
-  copy_comp 'OWNER'         <ls_stock> 'OWNER'         <ls_res_stock>.
-  copy_comp 'OWNER_ROLE'    <ls_stock> 'OWNER_ROLE'    <ls_res_stock>.
-  copy_comp 'ENTITLED'      <ls_stock> 'ENTITLED'      <ls_res_stock>.
-  copy_comp 'ENTITLED_ROLE' <ls_stock> 'ENTITLED_ROLE' <ls_res_stock>.
-  copy_comp 'STOCK_USAGE'   <ls_stock> 'STOCK_USAGE'   <ls_res_stock>.
+  set_comp 'GUID_STOCK'  <ls_res_stock> lv_guid_stock.
+  set_comp 'GUID_PARENT' <ls_res_stock> lv_guid_hu.
+  set_comp 'MATID'       <ls_res_stock> lv_matid.
+  set_comp 'BATCHID'     <ls_res_stock> lv_batchid.
+  set_comp 'MATNR'       <ls_res_stock> lv_matnr.
+  set_comp 'CHARG'       <ls_res_stock> lv_charg.
+  set_comp 'LGNUM_STOCK' <ls_res_stock> lv_lgnum.
 
-  ASSIGN COMPONENT 'HU_ITEM' OF STRUCTURE <ls_res_data> TO <ls_hu>.
-  IF sy-subrc = 0.
-    CLEAR <ls_hu>.
+  copy_comp 'CAT'           <ls_huitm> 'CAT'           <ls_res_stock>.
+  copy_comp 'OWNER'         <ls_huitm> 'OWNER'         <ls_res_stock>.
+  copy_comp 'OWNER_ROLE'    <ls_huitm> 'OWNER_ROLE'    <ls_res_stock>.
+  copy_comp 'ENTITLED'      <ls_huitm> 'ENTITLED'      <ls_res_stock>.
+  copy_comp 'ENTITLED_ROLE' <ls_huitm> 'ENTITLED_ROLE' <ls_res_stock>.
+  copy_comp 'STOCK_USAGE'   <ls_huitm> 'STOCK_USAGE'   <ls_res_stock>.
+  copy_comp 'STOCK_DOCCAT'  <ls_huitm> 'STOCK_DOCCAT'  <ls_res_stock>.
+  copy_comp 'STOCK_DOCNO'   <ls_huitm> 'STOCK_DOCNO'   <ls_res_stock>.
+  copy_comp 'STOCK_ITMNO'   <ls_huitm> 'STOCK_ITMNO'   <ls_res_stock>.
+
+*--------------------------------------------------------------------*
+* Preserve PMR document and item assignment for Single-Order Staging
+*--------------------------------------------------------------------*
+  copy_comp 'QDOCID' <ls_huitm> 'QDOCID' <ls_res_stock>.
+  copy_comp 'QITMID' <ls_huitm> 'QITMID' <ls_res_stock>.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'QDOCID' OF STRUCTURE <ls_res_stock> TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED
+     AND <lv_comp> IS INITIAL.
+    <lv_comp> = lv_qdocid.
   ENDIF.
 
-  ASSIGN COMPONENT 'HU_PARENT' OF STRUCTURE <ls_res_data> TO <ls_hu>.
-  IF sy-subrc = 0.
-    CLEAR <ls_hu>.
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'QITMID' OF STRUCTURE <ls_res_stock> TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED
+     AND <lv_comp> IS INITIAL.
+    <lv_comp> = cs_chg_data-qitmid.
   ENDIF.
+
+  copy_comp 'VFDAT' <ls_huitm> 'VFDAT' <ls_res_stock>.
+  copy_comp 'WDATU' <ls_huitm> 'WDATU' <ls_res_stock>.
+  copy_comp 'COO'   <ls_huitm> 'COO'   <ls_res_stock>.
+
+*--------------------------------------------------------------------*
+* Counted quantity belongs to Level 2 stock row
+*--------------------------------------------------------------------*
+  UNASSIGN <lt_cnt_quan>.
 
   ASSIGN COMPONENT 'T_QUAN' OF STRUCTURE <ls_cnt_res> TO <lt_cnt_quan>.
-  IF sy-subrc <> 0.
+
+  IF sy-subrc <> 0
+     OR <lt_cnt_quan> IS NOT ASSIGNED.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   CLEAR <lt_cnt_quan>.
 
-  INSERT INITIAL LINE INTO TABLE <lt_cnt_quan> ASSIGNING <ls_cnt_quan>.
+  INSERT INITIAL LINE INTO TABLE <lt_cnt_quan>
+    ASSIGNING <ls_cnt_quan>.
 
-  IF sy-subrc <> 0.
+  IF sy-subrc <> 0
+     OR <ls_cnt_quan> IS NOT ASSIGNED.
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   set_comp 'QAN_STATUS'       <ls_cnt_quan> 'M'.
   set_comp 'ENTERED_QUANTITY' <ls_cnt_quan> lv_actual_qty.
-  set_comp 'ENTERED_UNIT'     <ls_cnt_quan> is_screen_data-consumed_uom.
+  set_comp 'ENTERED_UNIT'     <ls_cnt_quan>
+                               is_screen_data-consumed_uom.
 
   APPEND ls_item_count TO lt_item_count.
 
@@ -762,13 +1057,19 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       e_rc_severity = lv_severity.
 
   IF lv_severity CA wmegc_severity_eax.
-    READ TABLE lt_bapiret INTO ls_bapiret WITH KEY type = 'E'.
+    READ TABLE lt_bapiret INTO ls_bapiret
+      WITH KEY type = 'E'.
+
     IF sy-subrc = 0.
-      MESSAGE ID ls_bapiret-id TYPE 'E' NUMBER ls_bapiret-number
-        WITH ls_bapiret-message_v1 ls_bapiret-message_v2
-             ls_bapiret-message_v3 ls_bapiret-message_v4
+      MESSAGE ID ls_bapiret-id TYPE 'E'
+        NUMBER ls_bapiret-number
+        WITH ls_bapiret-message_v1
+             ls_bapiret-message_v2
+             ls_bapiret-message_v3
+             ls_bapiret-message_v4
         RAISING error.
     ENDIF.
+
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
@@ -777,8 +1078,13 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 *--------------------------------------------------------------------*
 * Find the auto-created new document
 *--------------------------------------------------------------------*
-  CLEAR: ls_doc_ref_q, lt_item_read_q, lt_item_read_s,
-         ls_pi_doc_new, lv_found_new, lt_ref_cand.
+  CLEAR:
+    ls_doc_ref_q,
+    lt_item_read_q,
+    lt_item_read_s,
+    ls_pi_doc_new,
+    lv_found_new,
+    lt_ref_cand.
 
   ls_doc_ref_q-doc_number = ls_pi_doc-doc_number.
   ls_doc_ref_q-doc_year   = ls_pi_doc-doc_year.
@@ -802,39 +1108,53 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 
   IF sy-subrc = 0.
     ASSIGN <ls_item_read_s>-t_logitem TO <lt_logitem>.
-    IF sy-subrc = 0.
+
+    IF sy-subrc = 0
+       AND <lt_logitem> IS ASSIGNED.
+
       LOOP AT <lt_logitem> ASSIGNING <ls_logitem_any>.
+        UNASSIGN <lv_ref_doc_id>.
+
         ASSIGN COMPONENT 'REF_DOC_ID' OF STRUCTURE <ls_logitem_any> TO <lv_ref_doc_id>.
-        CHECK sy-subrc = 0 AND <lv_ref_doc_id> IS NOT INITIAL.
+
+        CHECK sy-subrc = 0.
+        CHECK <lv_ref_doc_id> IS ASSIGNED.
+        CHECK <lv_ref_doc_id> IS NOT INITIAL.
 
         lv_ref_id = <lv_ref_doc_id>.
         lv_len    = strlen( lv_ref_id ).
+
         CHECK lv_len >= 16.
 
         lv_off_docno = lv_len - 16.
         lv_off_item  = lv_len - 6.
 
         CLEAR ls_ref_cand.
+
         ls_ref_cand-doc_year   = lv_ref_id+4(4).
         ls_ref_cand-doc_number = lv_ref_id+lv_off_docno(10).
         ls_ref_cand-item_no    = lv_ref_id+lv_off_item(6).
 
-        CHECK ls_ref_cand-doc_number CO '0123456789 '
-          AND ls_ref_cand-doc_number IS NOT INITIAL
-          AND ls_ref_cand-doc_number <> ls_pi_doc-doc_number.
+        CHECK ls_ref_cand-doc_number CO '0123456789 '.
+        CHECK ls_ref_cand-doc_number IS NOT INITIAL.
+        CHECK ls_ref_cand-doc_number <> ls_pi_doc-doc_number.
 
         APPEND ls_ref_cand TO lt_ref_cand.
       ENDLOOP.
     ENDIF.
   ENDIF.
 
-  SORT lt_ref_cand BY doc_number DESCENDING.
+  SORT lt_ref_cand
+    BY doc_number DESCENDING
+       item_no    DESCENDING.
+
   READ TABLE lt_ref_cand INTO ls_ref_cand INDEX 1.
+
   IF sy-subrc = 0.
     ls_pi_doc_new-doc_number = ls_ref_cand-doc_number.
     ls_pi_doc_new-doc_year   = ls_ref_cand-doc_year.
     ls_pi_doc_new-item_no    = ls_ref_cand-item_no.
-    lv_found_new = abap_true.
+    lv_found_new             = abap_true.
   ENDIF.
 
   IF lv_found_new = abap_true.
@@ -843,21 +1163,39 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 *--------------------------------------------------------------------*
 * Count the follow-up document
 *--------------------------------------------------------------------*
-    ASSIGN COMPONENT 'DATA' OF STRUCTURE ls_item_count-t_item_result[ 1 ]
-      TO <ls_res_data>.
-    IF sy-subrc = 0.
-      set_comp 'DOC_NUMBER' <ls_res_data> ls_pi_doc-doc_number.
-      set_comp 'DOC_YEAR'   <ls_res_data> ls_pi_doc-doc_year.
-      set_comp 'ITEM_NO'    <ls_res_data> ls_pi_doc-item_no.
-    ENDIF.
+    LOOP AT ls_item_count-t_item_result
+      ASSIGNING <ls_cnt_res>.
+
+      UNASSIGN <ls_res_data>.
+
+      ASSIGN COMPONENT 'DATA' OF STRUCTURE <ls_cnt_res> TO <ls_res_data>.
+
+      IF sy-subrc = 0
+         AND <ls_res_data> IS ASSIGNED.
+        set_comp 'DOC_NUMBER' <ls_res_data> ls_pi_doc-doc_number.
+        set_comp 'DOC_YEAR'   <ls_res_data> ls_pi_doc-doc_year.
+        set_comp 'ITEM_NO'    <ls_res_data> ls_pi_doc-item_no.
+        set_comp 'QDOCID'     <ls_res_data> lv_qdocid.
+        set_comp 'QITMID'     <ls_res_data> cs_chg_data-qitmid.
+      ENDIF.
+    ENDLOOP.
 
     ls_item_count-doc_number = ls_pi_doc-doc_number.
     ls_item_count-doc_year   = ls_pi_doc-doc_year.
     ls_item_count-item_no    = ls_pi_doc-item_no.
 
-    lt_item_count[ 1 ] = ls_item_count.
+    READ TABLE lt_item_count ASSIGNING FIELD-SYMBOL(<ls_item_count_tab>)
+      INDEX 1.
 
-    CLEAR: lt_pi_doc, lt_bapiret, lv_severity.
+    IF sy-subrc <> 0
+       OR <ls_item_count_tab> IS NOT ASSIGNED.
+      MESSAGE e057(zmsg_i2o_rf) RAISING error.
+    ENDIF.
+
+    <ls_item_count_tab> = ls_item_count.
+
+    CLEAR:
+      lt_pi_doc, lt_bapiret, lv_severity.
 
     CALL FUNCTION '/SCWM/PI_CALL_DOCUMENT_COUNT'
       EXPORTING
@@ -871,13 +1209,19 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         e_rc_severity = lv_severity.
 
     IF lv_severity CA wmegc_severity_eax.
-      READ TABLE lt_bapiret INTO ls_bapiret WITH KEY type = 'E'.
+      READ TABLE lt_bapiret INTO ls_bapiret
+        WITH KEY type = 'E'.
+
       IF sy-subrc = 0.
-        MESSAGE ID ls_bapiret-id TYPE 'E' NUMBER ls_bapiret-number
-          WITH ls_bapiret-message_v1 ls_bapiret-message_v2
-               ls_bapiret-message_v3 ls_bapiret-message_v4
+        MESSAGE ID ls_bapiret-id TYPE 'E'
+          NUMBER ls_bapiret-number
+          WITH ls_bapiret-message_v1
+               ls_bapiret-message_v2
+               ls_bapiret-message_v3
+               ls_bapiret-message_v4
           RAISING error.
       ENDIF.
+
       MESSAGE e057(zmsg_i2o_rf) RAISING error.
     ENDIF.
 
@@ -887,16 +1231,22 @@ FUNCTION zfm_i2o_rf_post_act_cons.
 *--------------------------------------------------------------------*
 * PI POST
 *--------------------------------------------------------------------*
-  CLEAR: lt_item_post, ls_item_post, lt_pi_doc, lt_bapiret, lv_severity.
+  CLEAR:
+    lt_item_post,
+    ls_item_post,
+    lt_pi_doc,
+    lt_bapiret,
+    lv_severity.
 
   ls_item_post-doc_number = ls_pi_doc-doc_number.
   ls_item_post-doc_year   = ls_pi_doc-doc_year.
   ls_item_post-item_no    = ls_pi_doc-item_no.
 
   DATA lv_post_ts TYPE /lime/pi_count_date.
-  GET TIME STAMP FIELD lv_post_ts.
-  ls_item_post-post_date = lv_post_ts.
 
+  GET TIME STAMP FIELD lv_post_ts.
+
+  ls_item_post-post_date = lv_post_ts.
   APPEND ls_item_post TO lt_item_post.
 
   CALL FUNCTION '/SCWM/PI_CALL_DOCUMENT_POST'
@@ -910,37 +1260,27 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       e_rc_severity = lv_severity.
 
   IF lv_severity CA wmegc_severity_eax.
-    READ TABLE lt_bapiret INTO ls_bapiret WITH KEY type = 'E'.
+    READ TABLE lt_bapiret INTO ls_bapiret
+      WITH KEY type = 'E'.
+
     IF sy-subrc = 0.
-      MESSAGE ID ls_bapiret-id TYPE 'E' NUMBER ls_bapiret-number
-        WITH ls_bapiret-message_v1 ls_bapiret-message_v2
-             ls_bapiret-message_v3 ls_bapiret-message_v4
+      MESSAGE ID ls_bapiret-id TYPE 'E'
+        NUMBER ls_bapiret-number
+        WITH ls_bapiret-message_v1
+             ls_bapiret-message_v2
+             ls_bapiret-message_v3
+             ls_bapiret-message_v4
         RAISING error.
     ENDIF.
+
     MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDIF.
 
   COMMIT WORK AND WAIT.
 
-  " Diagnostic: the RF framework is still in FOREGROUND processing mode
-  " here (ZFM_I2O_RF_MICOTR_MIQUSL_PAI only switches to BACKGROUND
-  " after this whole function returns). A manual post via
-  " /SCWM/DIFF_ANALYZER - which has no such RF mode at all - succeeds
-  " cleanly for the exact same data, while this in-line call rejects
-  " with /SCWM/GM 014. Testing whether negative-stock handling differs
-  " by RF processing mode before pursuing a more invasive fix.
-  /scwm/cl_rf_bll_srvc=>set_prmod( /scwm/cl_rf_bll_srvc=>c_prmod_background ).
-
 *--------------------------------------------------------------------*
 * Diff Analyzer - automatically post remaining stock
 * differences to reconcile EWM stock with actual consumed qty.
-*
-* Every branch that used to silently skip (instance not bound, no
-* differences found, no posting data prepared, post rejected, or an
-* unexpected exception) now raises `error` instead. The caller only
-* posts the standard 261 consumption once this has genuinely
-* succeeded - otherwise EWM stock and the Process Order consumption
-* could end up inconsistent with no trace of why.
 *--------------------------------------------------------------------*
   DATA: lo_diff_analyzer     TYPE REF TO /scwm/if_diff_analyzer,
         lt_asp_od_itm        TYPE /scwm/tt_asp_diff_od_itm,
@@ -953,9 +1293,13 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         lv_diff_rejected     TYPE xfeld.
 
   FIELD-SYMBOLS:
-    <ls_od_itm>          TYPE any,
-    <lv_od_quan_target>  TYPE any,
-    <lv_od_quan_actual>  TYPE any.
+    <ls_od_itm>         TYPE any,
+    <lv_od_quan_target> TYPE any,
+    <lv_od_quan_actual> TYPE any,
+    <lv_od_matid>       TYPE any,
+    <lv_od_batchid>     TYPE any,
+    <lv_od_huident>     TYPE any,
+    <lv_od_lgpla>       TYPE any.
 
   TRY.
       CALL FUNCTION '/SCWM/DIFF_ANALYZER_GET_INST'
@@ -985,45 +1329,41 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         MESSAGE e057(zmsg_i2o_rf) RAISING error.
       ENDIF.
 
-*--------------------------------------------------------------------*
-* Scope down to only the differences tied to the exact original quant
-* this transaction resolved earlier via /SCWM/SELECT_STOCK
-* (lv_guid_stock). GET_DIFFERENCES returns every outstanding PI
-* difference for the material across the whole warehouse, and POST()
-* rejects the entire batch if even one unrelated item fails (e.g. a
-* stuck/unresolved difference left behind on a different HU) - which
-* would otherwise block this transaction's own valid difference from
-* ever posting.
-*
-* GUID_STOCK0 turned out to be shared across *every* outstanding
-* difference for this material+batch combination, not unique per
-* test/quant - filtering on it (an earlier attempt) let every leftover
-* difference from previous test runs ride along in the same batch.
-* Since POST() rejects its entire batch if even one item fails, any
-* one stuck leftover from an earlier run blocked this run's own valid
-* pair from ever posting.
-*
-* A single PI count produces a *pair* of od_itm rows: one against the
-* original quant (QUAN_TARGET = planned qty, QUAN_ACTUAL = 0) and one
-* against the new quant the count created (QUAN_TARGET = 0,
-* QUAN_ACTUAL = counted qty). These exact quantities are known to us
-* (lv_plan_qty / lv_actual_qty), so matching on them reliably isolates
-* just this transaction's own pair regardless of how many older,
-* still-unresolved differences exist for this material+batch.
-*
-* LT_ASP_OI_CUM is left untouched: it aggregates at a coarser level
-* shared across all items for this material and does not need to
-* mirror this item-level filter.
-*--------------------------------------------------------------------*
       CLEAR lt_asp_od_itm_scoped.
 
       LOOP AT lt_asp_od_itm ASSIGNING <ls_od_itm>.
-        UNASSIGN: <lv_od_quan_target>, <lv_od_quan_actual>.
+        UNASSIGN: <lv_od_quan_target>, <lv_od_quan_actual>,
+                   <lv_od_matid>, <lv_od_batchid>,
+                   <lv_od_huident>, <lv_od_lgpla>.
 
         ASSIGN COMPONENT 'QUAN_TARGET' OF STRUCTURE <ls_od_itm> TO <lv_od_quan_target>.
         ASSIGN COMPONENT 'QUAN_ACTUAL' OF STRUCTURE <ls_od_itm> TO <lv_od_quan_actual>.
+        ASSIGN COMPONENT 'MATID'       OF STRUCTURE <ls_od_itm> TO <lv_od_matid>.
+        ASSIGN COMPONENT 'BATCHID'     OF STRUCTURE <ls_od_itm> TO <lv_od_batchid>.
+        ASSIGN COMPONENT 'HUIDENT'     OF STRUCTURE <ls_od_itm> TO <lv_od_huident>.
+        ASSIGN COMPONENT 'LGPLA'       OF STRUCTURE <ls_od_itm> TO <lv_od_lgpla>.
 
         CHECK <lv_od_quan_target> IS ASSIGNED AND <lv_od_quan_actual> IS ASSIGNED.
+
+        IF <lv_od_matid> IS ASSIGNED AND <lv_od_matid> IS NOT INITIAL
+           AND <lv_od_matid> <> lv_matid.
+          CONTINUE.
+        ENDIF.
+
+        IF <lv_od_batchid> IS ASSIGNED AND <lv_od_batchid> IS NOT INITIAL
+           AND lv_batchid IS NOT INITIAL AND <lv_od_batchid> <> lv_batchid.
+          CONTINUE.
+        ENDIF.
+
+        IF <lv_od_huident> IS ASSIGNED AND <lv_od_huident> IS NOT INITIAL
+           AND <lv_od_huident> <> lv_huident.
+          CONTINUE.
+        ENDIF.
+
+        IF <lv_od_lgpla> IS ASSIGNED AND <lv_od_lgpla> IS NOT INITIAL
+           AND <lv_od_lgpla> <> lv_lgpla.
+          CONTINUE.
+        ENDIF.
 
         IF ( <lv_od_quan_target> = lv_plan_qty   AND <lv_od_quan_actual> = 0 )
         OR ( <lv_od_quan_target> = 0             AND <lv_od_quan_actual> = lv_actual_qty ).
@@ -1045,7 +1385,6 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         EXPORTING
           iv_lgnum      = lv_lgnum
           it_asp_od_itm = lt_asp_od_itm
-          it_asp_oi_cum = lt_asp_oi_cum
         IMPORTING
           et_diff_post  = lt_diff_post ).
 
@@ -1078,13 +1417,300 @@ FUNCTION zfm_i2o_rf_post_act_cons.
       MESSAGE e057(zmsg_i2o_rf) RAISING error.
   ENDTRY.
 
-  " Restore the RF processing mode the caller expects for its own
-  " later set_prmod(background) call and subsequent screen handling.
-  " NOTE: the MESSAGE ... RAISING error calls above exit this function
-  " immediately and bypass this restore - acceptable for this
-  " diagnostic pass since an error already aborts the RF step, but
-  " worth revisiting once the underlying hypothesis is confirmed.
   /scwm/cl_rf_bll_srvc=>set_prmod( /scwm/cl_rf_bll_srvc=>c_prmod_foreground ).
+
+*--------------------------------------------------------------------*
+* Refresh the exact HU stock after Difference Analyzer posting
+*
+* /SCWM/DIFF_ANALYZER creates a brand-new stock document (new
+* GUID_STOCK) for the reconciled quantity. It is standard SAP logic
+* with no awareness of the custom QDOCID/QITMID (Single-Order Staging)
+* fields validated and carried through above, so the new quant is NOT
+* guaranteed to carry them - unlike PI CREATE/COUNT, which we
+* explicitly populated with lv_qdocid/cs_chg_data-qitmid ourselves.
+*
+* Requiring an exact QDOCID/QITMID re-match against this new quant
+* would incorrectly raise "no stock" even though the physical stock is
+* right there on the HU: we already validated the PMR assignment
+* against the *original* quant before PI/Diff Analyzer ran, so
+* re-validating it here is redundant and, when the new quant does not
+* inherit the reservation, actively wrong. Prefer a quant that still
+* carries the matching QDOCID/QITMID (in case DIFF_ANALYZER did
+* preserve it), but fall back to a plain MATID+BATCHID+HU match -
+* which is sufficient since ir_huident/it_matid already scope the
+* SELECT_STOCK call to this exact HU and material.
+*--------------------------------------------------------------------*
+  DATA:
+    lt_matid_refresh TYPE /scwm/tt_matid,
+    lt_r_charg       TYPE rseloption,
+    ls_r_charg       TYPE rsdsselopt.
+
+  FIELD-SYMBOLS:
+    <ls_huitm_fallback> TYPE any.
+
+  CLEAR:
+    lt_huitm,
+    lt_huhdr,
+    lt_matid_refresh,
+    lt_r_charg,
+    lt_r_huident,
+    ls_r_charg,
+    ls_r_huident.
+
+  APPEND lv_matid TO lt_matid_refresh.
+
+  IF lv_charg IS NOT INITIAL.
+    ls_r_charg-sign   = 'I'.
+    ls_r_charg-option = 'EQ'.
+    ls_r_charg-low    = lv_charg.
+    APPEND ls_r_charg TO lt_r_charg.
+  ENDIF.
+
+  ls_r_huident-sign   = 'I'.
+  ls_r_huident-option = 'EQ'.
+  ls_r_huident-low    = lv_huident.
+  APPEND ls_r_huident TO lt_r_huident.
+
+  CALL FUNCTION '/SCWM/SELECT_STOCK'
+    EXPORTING
+      iv_lgnum    = lv_lgnum
+      it_matid    = lt_matid_refresh
+      ir_charg    = lt_r_charg
+      ir_huident  = lt_r_huident
+      iv_tolerant = abap_true
+    IMPORTING
+      et_huitm    = lt_huitm
+      et_huhdr    = lt_huhdr
+    EXCEPTIONS
+      error       = 1
+      OTHERS      = 2.
+
+  IF sy-subrc <> 0
+     OR lt_huitm IS INITIAL.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+  UNASSIGN: <ls_huitm>, <ls_huitm_fallback>.
+  CLEAR lv_stock_found.
+
+  LOOP AT lt_huitm ASSIGNING <ls_huitm>.
+    lv_match = abap_true.
+
+    UNASSIGN <lv_src>.
+
+    ASSIGN COMPONENT 'MATID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+    IF sy-subrc <> 0
+       OR <lv_src> IS NOT ASSIGNED
+       OR <lv_src> IS INITIAL
+       OR <lv_src> <> lv_matid.
+      lv_match = abap_false.
+    ENDIF.
+
+    IF lv_match = abap_true
+       AND lv_batchid IS NOT INITIAL.
+
+      UNASSIGN <lv_src>.
+
+      ASSIGN COMPONENT 'BATCHID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+      IF sy-subrc <> 0
+         OR <lv_src> IS NOT ASSIGNED
+         OR <lv_src> IS INITIAL
+         OR <lv_src> <> lv_batchid.
+        lv_match = abap_false.
+      ENDIF.
+    ENDIF.
+
+    IF lv_match = abap_true.
+      UNASSIGN <lv_src>.
+
+      ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+      IF sy-subrc = 0
+         AND <lv_src> IS ASSIGNED
+         AND <lv_src> IS NOT INITIAL.
+        " Keep this MATID+BATCHID+HU match as the fallback candidate,
+        " but keep looking - a row that also still carries the
+        " matching QDOCID/QITMID is preferred when one exists.
+        IF <ls_huitm_fallback> IS NOT ASSIGNED.
+          ASSIGN <ls_huitm> TO <ls_huitm_fallback>.
+        ENDIF.
+
+        UNASSIGN <lv_src>.
+
+        ASSIGN COMPONENT 'QDOCID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+        IF sy-subrc = 0
+           AND <lv_src> IS ASSIGNED
+           AND <lv_src> IS NOT INITIAL
+           AND <lv_src> = lv_qdocid.
+
+          UNASSIGN <lv_src>.
+
+          ASSIGN COMPONENT 'QITMID' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+          IF sy-subrc = 0
+             AND <lv_src> IS ASSIGNED
+             AND <lv_src> IS NOT INITIAL
+             AND <lv_src> = cs_chg_data-qitmid.
+            lv_stock_found = abap_true.
+            EXIT.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+  IF lv_stock_found = abap_false
+     AND <ls_huitm_fallback> IS ASSIGNED.
+    ASSIGN <ls_huitm_fallback> TO <ls_huitm>.
+    lv_stock_found = abap_true.
+  ENDIF.
+
+  IF lv_stock_found = abap_false.
+    UNASSIGN <ls_huitm>.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Refresh HU header as well
+*--------------------------------------------------------------------*
+  UNASSIGN <ls_huhdr>.
+
+  READ TABLE lt_huhdr ASSIGNING <ls_huhdr>
+    WITH KEY huident = lv_huident.
+
+  IF sy-subrc <> 0
+     OR <ls_huhdr> IS NOT ASSIGNED.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+  CLEAR lv_guid_hu.
+  UNASSIGN <lv_src>.
+
+  ASSIGN COMPONENT 'GUID_HU' OF STRUCTURE <ls_huhdr> TO <lv_src>.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
+    lv_guid_hu = <lv_src>.
+  ENDIF.
+
+  IF lv_guid_hu IS INITIAL.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Return the refreshed stock context to standard consumption
+*--------------------------------------------------------------------*
+  CLEAR:
+    lv_guid_stock,
+    lv_guid_parent.
+
+  UNASSIGN <lv_src>.
+
+  ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
+    lv_guid_stock = <lv_src>.
+  ENDIF.
+
+  UNASSIGN <lv_src>.
+
+  ASSIGN COMPONENT 'GUID_PARENT' OF STRUCTURE <ls_huitm> TO <lv_src>.
+
+  IF sy-subrc = 0
+     AND <lv_src> IS ASSIGNED
+     AND <lv_src> IS NOT INITIAL.
+    lv_guid_parent = <lv_src>.
+  ENDIF.
+
+  IF lv_guid_stock IS INITIAL
+     OR lv_guid_parent IS INITIAL.
+    MESSAGE e057(zmsg_i2o_rf) RAISING error.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Top-level stock references
+*--------------------------------------------------------------------*
+  cs_chg_data-guid_stock  = lv_guid_stock.
+  cs_chg_data-guid_parent = lv_guid_parent.
+
+*--------------------------------------------------------------------*
+* Return PMR document and item assignment
+*--------------------------------------------------------------------*
+  set_comp 'QDOCID' cs_chg_data lv_qdocid.
+  set_comp 'QITMID' cs_chg_data cs_chg_data-qitmid.
+
+*--------------------------------------------------------------------*
+* Nested batch stock references, only when fields exist
+*--------------------------------------------------------------------*
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'GUID_STOCK' OF STRUCTURE cs_chg_data-batch TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED.
+    <lv_comp> = lv_guid_stock.
+  ENDIF.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'GUID_PARENT' OF STRUCTURE cs_chg_data-batch TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED.
+    <lv_comp> = lv_guid_parent.
+  ENDIF.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'MATID' OF STRUCTURE cs_chg_data-batch TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED.
+    <lv_comp> = lv_matid.
+  ENDIF.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'BATCHID' OF STRUCTURE cs_chg_data-batch TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED.
+    <lv_comp> = lv_batchid.
+  ENDIF.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'QDOCID' OF STRUCTURE cs_chg_data-batch TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED.
+    <lv_comp> = lv_qdocid.
+  ENDIF.
+
+  UNASSIGN <lv_comp>.
+
+  ASSIGN COMPONENT 'QITMID' OF STRUCTURE cs_chg_data-batch TO <lv_comp>.
+
+  IF sy-subrc = 0
+     AND <lv_comp> IS ASSIGNED.
+    <lv_comp> = cs_chg_data-qitmid.
+  ENDIF.
+
+*--------------------------------------------------------------------*
+* Additional HU and bin context when available
+*--------------------------------------------------------------------*
+  set_comp 'GUID_HU'     cs_chg_data lv_guid_hu.
+  set_comp 'HU_OR_BIN'   cs_chg_data lv_huident.
+  set_comp 'HUIDENT'     cs_chg_data lv_huident.
+  set_comp 'LGPLA'       cs_chg_data lv_lgpla.
+  set_comp 'STORAGE_BIN' cs_chg_data lv_lgpla.
+  set_comp 'SOURCE_BIN'  cs_chg_data lv_lgpla.
 
 *--------------------------------------------------------------------*
 * Hand back consumed qty/uom for the caller's 261
