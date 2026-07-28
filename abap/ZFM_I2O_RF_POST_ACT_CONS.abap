@@ -1392,6 +1392,40 @@ FUNCTION zfm_i2o_rf_post_act_cons.
         MESSAGE e057(zmsg_i2o_rf) RAISING error.
       ENDIF.
 
+*--------------------------------------------------------------------*
+* Re-stamp the PMR reservation (QDOCID/QITMID) onto the posting data
+* before POST() runs. Confirmed via debugger: the quant DIFF_ANALYZER
+* creates comes back with QDOCID/QITMID = 0 - it does not carry this
+* Single-Order-Staging reservation forward - which is why standard
+* SAP's own post_consumption() call later fails with /SCWM/PWR 025
+* ("No stock for PMR ... found in bin") even though our own stock
+* lookup above succeeds. If /scwm/tt_diff_post's line type actually
+* has these components, this keeps the reservation attached to the
+* new quant; it is a no-op (harmless) if the line type has no such
+* fields at all.
+*--------------------------------------------------------------------*
+      LOOP AT lt_diff_post ASSIGNING <ls_od_itm>.
+        UNASSIGN <lv_comp>.
+
+        ASSIGN COMPONENT 'QDOCID' OF STRUCTURE <ls_od_itm> TO <lv_comp>.
+
+        IF sy-subrc = 0
+           AND <lv_comp> IS ASSIGNED
+           AND <lv_comp> IS INITIAL.
+          <lv_comp> = lv_qdocid.
+        ENDIF.
+
+        UNASSIGN <lv_comp>.
+
+        ASSIGN COMPONENT 'QITMID' OF STRUCTURE <ls_od_itm> TO <lv_comp>.
+
+        IF sy-subrc = 0
+           AND <lv_comp> IS ASSIGNED
+           AND <lv_comp> IS INITIAL.
+          <lv_comp> = cs_chg_data-qitmid.
+        ENDIF.
+      ENDLOOP.
+
       CLEAR: lt_diff_bapiret, lv_diff_rejected.
 
       lv_diff_rejected = lo_diff_analyzer->post(
